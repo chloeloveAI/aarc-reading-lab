@@ -485,7 +485,11 @@ export default function FocusReading({ passage, structure, title, plan, learner,
           </div>
         </div>
         <button
-          onClick={() => setConfirmFinish(true)}
+          onClick={() => {
+            setTutorFor(null);
+            setPending(null);
+            setConfirmFinish(true);
+          }}
           className="ql-focus px-4 py-2"
           style={{ background: C.ink, color: C.card, borderRadius: 2, fontFamily: F.ui, fontSize: 13, fontWeight: 700 }}
         >
@@ -494,7 +498,14 @@ export default function FocusReading({ passage, structure, title, plan, learner,
       </div>
 
       {confirmFinish && (
-        <div className="mt-4 px-4 py-4" style={{ background: C.card, border: `1px solid ${C.ink}`, borderRadius: 2 }}>
+        /* fixed to the bottom of the screen, so it is visible wherever the reader has scrolled */
+        <div
+          role="dialog"
+          aria-label="Finish reading"
+          className="fixed z-50 left-0 right-0 bottom-0 px-4 py-4"
+          style={{ background: C.card, borderTop: `2px solid ${C.ink}`, boxShadow: "0 -8px 30px rgba(22,32,43,0.18)", paddingBottom: "calc(16px + env(safe-area-inset-bottom, 0px))" }}
+        >
+          <div className="max-w-3xl mx-auto">
           <p style={{ fontFamily: F.ui, fontSize: 15, color: C.ink, lineHeight: 1.5 }}>
             Finish reading? Your {plan?.counts?.reduce((a, b) => a + b, 0) || ""} questions will be written now, from the whole text. You'll still see the passage while you answer, but you can't come back to focus reading.
           </p>
@@ -505,6 +516,7 @@ export default function FocusReading({ passage, structure, title, plan, learner,
             <button onClick={() => setConfirmFinish(false)} className="ql-focus px-4 py-2" style={{ border: `1px solid ${C.ink}`, color: C.ink, borderRadius: 2, fontFamily: F.ui, fontSize: 14, fontWeight: 700 }}>
               Keep reading
             </button>
+          </div>
           </div>
         </div>
       )}
@@ -602,7 +614,7 @@ export default function FocusReading({ passage, structure, title, plan, learner,
       </div>
 
       {/* selection bar */}
-      {pending && !hlOpen && (
+      {pending && !hlOpen && !confirmFinish && (
         <div
           className="fixed z-40 left-0 right-0 bottom-0 px-4 py-3"
           style={{ background: C.ink, paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))" }}
