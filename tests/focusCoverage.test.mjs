@@ -166,7 +166,9 @@ test("L1", "Stem naming the final section is rejected when the evidence is in an
   assert.equal(stemLocationProblem("Why does the author mention roadworks in the final section?", 9, 9), "");
   assert.equal(stemLocationProblem("In Section 3, what does 'centre' mean?", 3, 9), "");
   assert.match(stemLocationProblem("In the third section, why…?", 5, 9), /names section 3/);
-  assert.match(stemLocationProblem("What does the last quarter suggest?", 9, 9), /quarter/);
+  assert.match(stemLocationProblem("What does Q4 suggest about the method?", 9, 9), /quarter/);
+  assert.match(stemLocationProblem("What happens in the last quarter of the text?", 9, 9), /quarter/);
+  assert.equal(stemLocationProblem("Why did fares cover only a quarter of the cost?", 6, 9), "");
   assert.equal(stemLocationProblem("Why does the author mention roadworks?", 8, 9), "");
 });
 
