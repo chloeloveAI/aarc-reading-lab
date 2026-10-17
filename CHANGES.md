@@ -1,6 +1,6 @@
 # Changes — v10.4 (17 Oct 2026)
 
-Prompt `items-v10.3` · validator `validator-v10.2` · coverage `coverage-v1` · tutor `tutor-v1` · app `aarc-reading-lab-v10.4`.
+Prompt `items-v10.3` · validator `validator-v10.2` · coverage `coverage-v2` · tutor `tutor-v1` · app `aarc-reading-lab-v10.4`.
 **Runs before and after this change are not comparable without noting the version.**
 
 ## 1. Cloud model (OpenRouter) through the site
@@ -39,8 +39,15 @@ Prompt `items-v10.3` · validator `validator-v10.2` · coverage `coverage-v1` ·
 - Selecting up to 1,500 characters (a whole paragraph) now opens "Ask about this"; the old limit was 400 and longer selections did nothing.
 - Research note: hint counts and "answered without a hint" from before v10.4 are not comparable with these.
 
-## 6. Tests
-- New: `tests/focusCoverage.test.mjs` (15 deterministic cases: quarters, the coverage plan, the tutor's read-so-far text, the coverage block in the prompt, section-name check, answer-key positions, the coach's leak check).
+## 6. Quarters cut at sentences (coverage-v2)
+- coverage-v1 cut the text into quarters between paragraphs. On a passage with a few very long paragraphs, a whole quarter fell inside one paragraph, so its marker was missing; the plan still asked for a question "from Quarter 2", and the model correctly declined. That level was then recorded as a shortfall.
+- Now quarters are cut at sentence boundaries (a sentence belongs to the quarter where it starts), so a marker can sit inside a long paragraph; the text itself is unchanged.
+- The plan only uses quarters that exist (a text of fewer than four sentences has fewer quarters).
+- The quarter of evidence, highlights and saved words is judged by sentence, not by paragraph.
+- Runs made with coverage-v1 on long-paragraph passages may show false shortfalls; check `coverage_version` in the run record.
+
+## 7. Tests
+- New: `tests/focusCoverage.test.mjs` (17 deterministic cases: quarters, the coverage plan, the tutor's read-so-far text, the coverage block in the prompt, section-name check, answer-key positions, the coach's leak check, long-paragraph and short-text quarters).
 
 # Changes — 15 Oct 2026
 
