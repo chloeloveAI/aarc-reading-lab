@@ -13,42 +13,109 @@
  * Pure functions only (no React, no model calls), so they can be tested.
  * ------------------------------------------------------------------ */
 
-export const COVERAGE_VERSION = "coverage-v1";
+export const COVERAGE_VERSION = "coverage-v2";
 export const QUARTERS = 4;
 
 const words = (s) => (String(s).match(/\S+/g) || []).length;
 
-/* quarter (1–4) of every line, by the position of the line's middle word */
-export function lineQuarters(lines) {
-  const counts = lines.map(words);
-  const total = counts.reduce((a, b) => a + b, 0) || 1;
-  let before = 0;
-  return counts.map((c) => {
-    const mid = before + c / 2;
-    before += c;
-    return Math.min(QUARTERS, Math.max(1, Math.floor((mid / total) * QUARTERS) + 1));
+/* ---------------------------- quarters ------------------------------ *
+ * v10.4 (coverage-v2): quarters are cut at SENTENCE boundaries, so a long
+ * paragraph can hold a quarter boundary. (coverage-v1 cut between lines
+ * only; a passage with very long paragraphs could lose a quarter marker.)
+ * Character offsets are measured in the normalised line (lower case,
+ * single spaces), the same form the app uses to locate evidence.          */
+export const normLine = (s) =>
+  String(s).toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"').replace(/\s+/g, " ");
+
+function sentences(lines) {
+  const out = [];
+  lines.forEach((raw, line) => {
+    const t = normLine(raw);
+    if (!t.trim()) return;
+    const re = /[^.!?]+(?:[.!?]+["')\]]*|$)\s*/g;
+    let m;
+    while ((m = re.exec(t))) {
+      if (!m[0]) break;
+      const w = (m[0].match(/\S+/g) || []).length;
+      if (w) out.push({ line, char: m.index, words: w });
+      if (re.lastIndex >= t.length) break;
+    }
   });
+  return out;
 }
 
-/* the first line of each quarter (blank lines are skipped) */
-export function quarterStarts(lines) {
-  const q = lineQuarters(lines);
-  const starts = {};
-  lines.forEach((l, i) => {
-    if (!String(l).trim()) return;
-    if (starts[q[i]] == null) starts[q[i]] = i;
+/**
+ * quarterMap(lines) → { available, starts, posQuarter(line, char), lineQuarter[] }
+ * available: the quarters that actually have text (usually [1,2,3,4]).
+ */
+export function quarterMap(lines) {
+  const sent = sentences(lines);
+  const total = sent.reduce((a, s) => a + s.words, 0) || 1;
+  let before = 0;
+  let last = 1;
+  sent.forEach((s) => {
+    /* a sentence belongs to the quarter where it starts, so the text always begins in quarter 1 */
+    s.q = Math.max(last, Math.min(QUARTERS, Math.floor((before / total) * QUARTERS) + 1));
+    before += s.words;
+    last = s.q;
   });
-  return starts;
+  const starts = {};
+  sent.forEach((s) => {
+    if (!starts[s.q]) starts[s.q] = { line: s.line, char: s.char };
+  });
+  const available = Object.keys(starts).map(Number).sort((a, b) => a - b);
+  const posQuarter = (line, char = 0) => {
+    let q = available[0] || 1;
+    for (const s of sent) {
+      if (s.line < line || (s.line === line && s.char <= char)) q = s.q;
+      else break;
+    }
+    return q;
+  };
+  return { available, starts, posQuarter, lineQuarter: lines.map((_, i) => posQuarter(i, 0)) };
+}
+
+/* kept for older callers: quarter at the start of each line */
+export function lineQuarters(lines) {
+  return quarterMap(lines).lineQuarter;
+}
+
+export function quarterStarts(lines) {
+  const { starts } = quarterMap(lines);
+  return Object.fromEntries(Object.entries(starts).map(([q, s]) => [q, s.line]));
 }
 
 /* The passage as the model sees it, with a marker line before each quarter.
-   Markers sit on their own lines so anchors copied from the text stay exact. */
+   A marker inside a paragraph splits that paragraph at the sentence boundary;
+   the text itself is unchanged, so anchors copied from it stay exact. */
 export function passageWithQuarters(lines) {
-  const starts = quarterStarts(lines);
+  const { starts } = quarterMap(lines);
+  const byLine = {};
+  Object.entries(starts).forEach(([q, s]) => (byLine[s.line] = byLine[s.line] || []).push({ q: Number(q), char: s.char }));
   const out = [];
   lines.forEach((l, i) => {
-    for (let q = 1; q <= QUARTERS; q++) if (starts[q] === i) out.push(`[QUARTER ${q} OF ${QUARTERS} STARTS HERE]`);
-    out.push(l);
+    const cuts = (byLine[i] || []).sort((a, b) => a.char - b.char);
+    if (!cuts.length) return out.push(l);
+    /* map the normalised offset back onto the raw line by counting non-space characters */
+    const rawAt = (normChar) => {
+      const n = normLine(l);
+      const target = n.slice(0, normChar).replace(/\s/g, "").length;
+      let seen = 0;
+      for (let k = 0; k < l.length; k++) {
+        if (seen === target && !/\s/.test(l[k])) return k;
+        if (!/\s/.test(l[k])) seen++;
+      }
+      return l.length;
+    };
+    let pos = 0;
+    cuts.forEach((c) => {
+      const at = rawAt(c.char);
+      const head = l.slice(pos, at).trimEnd();
+      if (head) out.push(head);
+      out.push(`[QUARTER ${c.q} OF ${QUARTERS} STARTS HERE]`);
+      pos = at;
+    });
+    out.push(l.slice(pos));
   });
   return out.join("\n");
 }
@@ -81,7 +148,8 @@ export const maxTargeted = (total) => Math.floor(total / 3);
  * counts: questions per process, e.g. [1,2,2,1] or [2,3,3,2]
  * slot: { slot_id, level, quarter, focus|null }
  */
-export function buildBlueprint(counts, focus = []) {
+export function buildBlueprint(counts, focus = [], available = [1, 2, 3, 4]) {
+  const avail = (available && available.length ? available : [1, 2, 3, 4]).filter((q) => q >= 1 && q <= QUARTERS);
   const slots = [];
   counts.forEach((c, li) => {
     for (let i = 0; i < c; i++) slots.push({ level: li + 1, quarter: null, focus: null });
@@ -113,8 +181,9 @@ export function buildBlueprint(counts, focus = []) {
       if (targeted >= cap) break;
       if (used.has(f)) continue;
       if (pass === 0 && targetedIn[f.quarter]) continue;
-      /* keep every quarter reachable: a quarter may hold at most ceil(total/4) items */
-      if (load[f.quarter] >= Math.ceil(total / QUARTERS)) continue;
+      /* keep every quarter reachable: a quarter may hold at most ceil(total/quarters) items */
+      if (!avail.includes(f.quarter)) continue;
+      if (load[f.quarter] >= Math.ceil(total / avail.length)) continue;
       let slot = null;
       for (const lv of LEVEL_PREF[f.kind]) {
         slot = slots.find((s) => s.level === lv && !s.focus);
@@ -136,13 +205,13 @@ export function buildBlueprint(counts, focus = []) {
   for (const s of slots) {
     if (s.quarter) continue;
     let best = null;
-    for (let k = 0; k < QUARTERS; k++) {
-      const q = ((cursor + k) % QUARTERS) + 1;
+    for (let k = 0; k < avail.length; k++) {
+      const q = avail[(cursor + k) % avail.length];
       const score = load[q] * 10 + (levelInQuarter[s.level + ":" + q] ? 1 : 0);
       if (!best || score < best.score) best = { q, score };
     }
     mark(s, best.q);
-    cursor = best.q % QUARTERS;
+    cursor = (avail.indexOf(best.q) + 1) % avail.length;
   }
 
   return slots.map((s, i) => ({ slot_id: "S" + String(i + 1).padStart(2, "0"), ...s }));

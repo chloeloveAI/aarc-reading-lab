@@ -39,7 +39,7 @@ import {
   logReading,
 } from "./research";
 import FocusReading from "./FocusReading";
-import { lineQuarters, passageWithQuarters, buildBlueprint, blueprintSummary, COVERAGE_VERSION, stemLocationProblem, keyPlan, placeKey } from "./coverage";
+import { quarterMap, normLine, passageWithQuarters, buildBlueprint, blueprintSummary, COVERAGE_VERSION, stemLocationProblem, keyPlan, placeKey } from "./coverage";
 import { loadFlags, exportFlagsCSV, exportFlagsJSON, agreement } from "./flags";
 import {
   complete,
@@ -2188,9 +2188,9 @@ export default function App() {
       }
     };
     /* v10.4 coverage: quarters of the text, and a plan for every question slot */
-    const qOf = lineQuarters(st.lines);
+    const qm = quarterMap(st.lines);
     const markedPassage = passageWithQuarters(st.lines);
-    const blueprint = buildBlueprint(source.plan.counts, source.reading?.focus || []);
+    const blueprint = buildBlueprint(source.plan.counts, source.reading?.focus || [], qm.available);
     const filledSlots = new Set();
     const usedAnchors = [];
     /* v10.4: spread the correct answer evenly over A–D (models favour A) */
@@ -2353,7 +2353,9 @@ export default function App() {
             if (rec.item && res.anchor_loc) {
               const aLine = res.anchor_loc.line;
               const bLine = res.anchor2_loc?.line;
-              aQuarter = qOf[aLine];
+              /* quarter of the evidence itself (sentence level), not of its paragraph */
+              const aw = locate(st, rec.item.anchor);
+              aQuarter = qm.posQuarter(aLine, aw ? aw.sortKey % 100000 : 0);
               const ev = contentWords(rec.item.anchor);
               const reused =
                 ev.length >= 3 &&

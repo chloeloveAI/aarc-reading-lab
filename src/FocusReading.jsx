@@ -15,7 +15,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { WordCard } from "./Glossary";
 import { tutorTurn, textUpTo, TUTOR_VERSION } from "./tutor";
-import { lineQuarters } from "./coverage";
+import { quarterMap, normLine } from "./coverage";
 
 const C = {
   ink: "#16202B",
@@ -247,7 +247,12 @@ function TutorSheet({ hl, thread, busy, err, onSend, onRetry, onClose }) {
 
 export default function FocusReading({ passage, structure, title, plan, learner, draftKey, onFinish, onExit }) {
   const { lines, sections } = structure;
-  const quarters = useMemo(() => lineQuarters(lines), [lines]);
+  const qm = useMemo(() => quarterMap(lines), [lines]);
+  /* quarter of a piece of text inside a line (sentence level) */
+  const quarterOf = (line, text) => {
+    const at = normLine(lines[line] || "").indexOf(normLine(text || "").trim().slice(0, 40));
+    return qm.posQuarter(line, Math.max(0, at));
+  };
   const totalWords = useMemo(() => lines.reduce((a, l) => a + wc(l), 0) || 1, [lines]);
   const wordsBefore = useMemo(() => {
     let acc = 0;
@@ -354,7 +359,7 @@ export default function FocusReading({ passage, structure, title, plan, learner,
       text: p.text,
       start_line: p.startLine,
       end_line: p.endLine,
-      quarter: quarters[p.startLine],
+      quarter: quarterOf(p.startLine, p.text),
       words: wc(p.text),
       at: new Date().toISOString(),
       explained: !!explained,
@@ -570,7 +575,7 @@ export default function FocusReading({ passage, structure, title, plan, learner,
                     text={text}
                     marks={marksFor(i, text)}
                     onWord={(word, sentence) => {
-                      setLookups((ls) => [...ls, { word, sentence: sentence.slice(0, 300), line: i, quarter: quarters[i], saved: false, at: new Date().toISOString() }]);
+                      setLookups((ls) => [...ls, { word, sentence: sentence.slice(0, 300), line: i, quarter: quarterOf(i, word), saved: false, at: new Date().toISOString() }]);
                       setLookup({ word, sentence, line: i });
                     }}
                   />
