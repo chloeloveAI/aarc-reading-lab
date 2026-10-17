@@ -32,8 +32,15 @@ Prompt `items-v10.3` · validator `validator-v10.2` · coverage `coverage-v1` ·
 - **Process-3 hints pointed at one place first.** The first two hints named only the first evidence span and the passage outlined only that place, which steered readers into a one-place reading. Now hint 1 names both sections ("This question joins two parts of the text: … and … Read both."), hint 2 names both paragraphs, the passage outlines both places at every step, and the last hint marks both spans. Hint counts before and after this change are not comparable for process 3.
 - **Saved-word questions** must quote the words around the term, and the passage marks that sentence straight away (no hint needed), with the label "A word you saved while reading".
 
-## 5. Tests
-- New: `tests/focusCoverage.test.mjs` (14 deterministic cases: quarters, the coverage plan, the tutor's read-so-far text, the coverage block in the prompt, section-name check, answer-key positions).
+## 5. Help while answering: thinking first, location last
+- **New hint ladder** (all processes): 1 strategy for the process (e.g. process 3: "Which two ideas does it ask you to connect?") · 2 key word in her own words · 3 the item's guiding question · 4 **strong help**: the section(s) to look in (both, for process 3). The paragraph step and the "evidence marked" step before answering are gone: location hints turned reading into search. The exact evidence is shown only after answering, as feedback.
+- **Question coach** (`coach-v1`) replaces the general ask panel while a question is open. It answers facts and word meanings directly; for interpretation it asks one question back. It never names a place in the text or repeats the correct option: every reply is checked in code, rewritten once, then replaced by a neutral nudge. After she answers, it can explain fully.
+- **Coach use before answering counts as help.** Each answer now records `coach` (turns before answering), `coachAfter`, `helped` and `locationShown`. Results line: "X of N answered without help · Y needed to be shown where to look · Z used the question coach".
+- Selecting up to 1,500 characters (a whole paragraph) now opens "Ask about this"; the old limit was 400 and longer selections did nothing.
+- Research note: hint counts and "answered without a hint" from before v10.4 are not comparable with these.
+
+## 6. Tests
+- New: `tests/focusCoverage.test.mjs` (15 deterministic cases: quarters, the coverage plan, the tutor's read-so-far text, the coverage block in the prompt, section-name check, answer-key positions, the coach's leak check).
 
 # Changes — 15 Oct 2026
 
