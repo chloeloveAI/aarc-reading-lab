@@ -1,0 +1,222 @@
+{
+  "probe_set": "agsverdict-probes-v0.2",
+  "passage": "TP-01 unless the case says sample TP-02",
+  "map": "tests/fixtures/tp01_map.json",
+  "expected_status": "PROPOSED by Claude, 16 Oct 2026. The researcher must confirm or change each expected value BEFORE results are used. Where two outcomes are defensible, both are listed.",
+  "cases": [
+    {
+      "id": "V01",
+      "category": "paraphrase_en",
+      "idea": "K0",
+      "ask": "opening",
+      "answer": "The group thinks making the buses free worked well in year one, and it wants every city to do the same.",
+      "expected": [
+        "correct"
+      ],
+      "sample": "TP-01"
+    },
+    {
+      "id": "V02",
+      "category": "mixed_cantonese_english",
+      "idea": "K0",
+      "ask": "opening",
+      "answer": "佢哋覺得 free bus 第一年好成功，想其他城市 follow，同埋要 keep 落去。",
+      "expected": [
+        "correct"
+      ],
+      "sample": "TP-01"
+    },
+    {
+      "id": "V03",
+      "category": "written_chinese",
+      "idea": "K0",
+      "ask": "opening",
+      "answer": "作者認為免費巴士在第一年很成功，並希望政策永久推行。",
+      "expected": [
+        "correct"
+      ],
+      "sample": "TP-01"
+    },
+    {
+      "id": "V04",
+      "category": "spelling_errors",
+      "idea": "K0",
+      "ask": "opening",
+      "answer": "they beleive free busses sucseeded and want it to be permanant",
+      "expected": [
+        "correct"
+      ],
+      "sample": "TP-01"
+    },
+    {
+      "id": "V05",
+      "category": "partial",
+      "idea": "K0",
+      "ask": "opening",
+      "answer": "Free buses were a success.",
+      "expected": [
+        "partial"
+      ],
+      "sample": "TP-01"
+    },
+    {
+      "id": "V06",
+      "category": "paraphrase_en",
+      "idea": "K1",
+      "ask": "opening",
+      "answer": "More people rode the buses, up by about a third, and there was a bit less traffic.",
+      "expected": [
+        "correct"
+      ],
+      "sample": "TP-01"
+    },
+    {
+      "id": "V07",
+      "category": "misreading",
+      "idea": "K2",
+      "ask": "opening",
+      "answer": "Most of the new riders used to drive.",
+      "expected": [
+        "incorrect"
+      ],
+      "sample": "TP-01"
+    },
+    {
+      "id": "V08",
+      "category": "relation_missing",
+      "idea": "K3",
+      "ask": "opening",
+      "answer": "Petrol got more expensive. Eastholme's buses were up 9 per cent.",
+      "expected": [
+        "partial"
+      ],
+      "sample": "TP-01"
+    },
+    {
+      "id": "V09",
+      "category": "relation_reversed",
+      "idea": "K3",
+      "ask": "opening",
+      "answer": "Because Marlow Bay made buses free, petrol prices went up across the region.",
+      "expected": [
+        "incorrect"
+      ],
+      "sample": "TP-01"
+    },
+    {
+      "id": "V10",
+      "category": "mixed_cantonese_english_relation",
+      "idea": "K3",
+      "ask": "opening",
+      "answer": "油價升咗，而且 Eastholme 冇 free bus 都多咗 9%，so 唔係全部都因為免費。",
+      "expected": [
+        "correct"
+      ],
+      "sample": "TP-01"
+    },
+    {
+      "id": "V11",
+      "category": "alternative_supported",
+      "idea": "K3",
+      "ask": "opening",
+      "answer": "Some people probably just tried the bus because it was new, so not all of the rise is because it is free.",
+      "expected": [
+        "alternative_supported"
+      ],
+      "sample": "TP-01"
+    },
+    {
+      "id": "V12",
+      "category": "alternative_uncertain",
+      "idea": "K3",
+      "ask": "opening",
+      "answer": "Maybe the hospital and university routes made people ride more anyway.",
+      "expected": [
+        "alternative_uncertain",
+        "incorrect"
+      ],
+      "note": "The text says those routes were full, not that they explain the rise. Uncertain or unsupported both defensible.",
+      "sample": "TP-01"
+    },
+    {
+      "id": "V13",
+      "category": "alternative_unsupported_with_quote",
+      "idea": "K4",
+      "ask": "opening",
+      "answer": "'Some passengers may have tried the bus out of curiosity', so the roadworks had nothing to do with traffic.",
+      "expected": [
+        "incorrect"
+      ],
+      "sample": "TP-01"
+    },
+    {
+      "id": "V14",
+      "category": "no_attempt_chinese",
+      "idea": "K0",
+      "ask": "opening",
+      "answer": "唔知",
+      "expected": [
+        "no_attempt"
+      ],
+      "sample": "TP-01"
+    },
+    {
+      "id": "V15",
+      "category": "copied_partial",
+      "idea": "K0",
+      "ask": "opening",
+      "answer": "Our Alliance campaigned for the policy for six years, and we believe the first year has proved it right.",
+      "expected": [
+        "partial"
+      ],
+      "note": "Also check expression flag 'copied'.",
+      "sample": "TP-01"
+    },
+    {
+      "id": "N01",
+      "sample": "TP-02",
+      "category": "narrative_description_names",
+      "idea": "K0",
+      "ask": "opening",
+      "answer": "An old man who fixes watches is losing his shop, and he helps a girl repair her grandma's watch herself.",
+      "expected": [
+        "correct"
+      ]
+    },
+    {
+      "id": "N02",
+      "sample": "TP-02",
+      "category": "narrative_mixed_cantonese_english",
+      "idea": "K1",
+      "ask": "opening",
+      "answer": "Mei 想個 watch 喺星期六 wedding 前整好，但 Mr Lo 話 Friday 就冇 stall，唔肯接。",
+      "expected": [
+        "correct"
+      ]
+    },
+    {
+      "id": "N03",
+      "sample": "TP-02",
+      "category": "narrative_relation_missing",
+      "idea": "K2",
+      "ask": "opening",
+      "answer": "She knew the name of the escape wheel. On Thursday he opened the tin.",
+      "expected": [
+        "partial"
+      ]
+    },
+    {
+      "id": "N04",
+      "sample": "TP-02",
+      "category": "narrative_forced_moral",
+      "idea": "K0",
+      "ask": "opening",
+      "answer": "The lesson is that you should never give up on your dreams.",
+      "expected": [
+        "incorrect",
+        "alternative_uncertain"
+      ],
+      "note": "The story states no moral. A generic moral should not be credited."
+    }
+  ]
+}

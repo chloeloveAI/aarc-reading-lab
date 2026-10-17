@@ -1,0 +1,188 @@
+{
+  "map_id": "TP01-MAP-TEST",
+  "passage_id": "TP-01",
+  "map_version": "test-fixture-1",
+  "review_status": "unreviewed",
+  "passage_type": "informational_argumentative",
+  "passage_type_reason": "An advocacy group makes a claim (free buses work) and supports it with evidence.",
+  "note": "Hand-written test fixture for the Phase 1 rule tests. Not model-generated and not reviewed for learner use.",
+  "ideas": [
+    {
+      "id": "K0",
+      "role": "main",
+      "topic_label": "the Alliance's overall claim",
+      "statement": "The Alliance argues that free buses succeeded in their first year and should be made permanent and copied.",
+      "elements": [
+        {
+          "id": "E1",
+          "label": "free buses succeeded in year one"
+        },
+        {
+          "id": "E2",
+          "label": "calls for the policy to be permanent or copied"
+        }
+      ],
+      "evidence": [
+        {
+          "quote": "we believe the first year has proved it right"
+        },
+        {
+          "quote": "we urge the council to make the policy permanent"
+        }
+      ],
+      "depends_on": [],
+      "questions": {
+        "opening": "What is the author's main argument or claim?",
+        "focus": {
+          "E1": "What does the Alliance think the first year showed?",
+          "E2": "What does the Alliance want to happen next?"
+        },
+        "clarify": "Can you say a little more about what you mean, using the text?"
+      }
+    },
+    {
+      "id": "K1",
+      "role": "support",
+      "topic_label": "evidence of success",
+      "statement": "Bus journeys rose by 35 per cent and city-centre traffic fell by about 6 per cent.",
+      "elements": [
+        {
+          "id": "E1",
+          "label": "bus journeys rose sharply"
+        },
+        {
+          "id": "E2",
+          "label": "city-centre traffic fell"
+        }
+      ],
+      "evidence": [
+        {
+          "quote": "they carried 24.6 million, an increase of 35 per cent"
+        },
+        {
+          "quote": "a drop of about 6 per cent"
+        }
+      ],
+      "depends_on": [
+        "K0"
+      ],
+      "questions": {
+        "opening": "What evidence does the Alliance give that the policy worked?",
+        "focus": {
+          "E1": "What happened to the number of passenger trips?",
+          "E2": "What did the road counters show?"
+        },
+        "clarify": "Which part of the text are you thinking of?"
+      }
+    },
+    {
+      "id": "K2",
+      "role": "support",
+      "topic_label": "who the new riders are",
+      "statement": "The survey suggests more new passengers had walked or cycled (41 per cent) than had driven (38 per cent).",
+      "elements": [
+        {
+          "id": "E1",
+          "label": "38 per cent would have driven"
+        },
+        {
+          "id": "E2",
+          "label": "41 per cent would have walked or cycled"
+        }
+      ],
+      "evidence": [
+        {
+          "quote": "38 per cent said they would previously have driven"
+        },
+        {
+          "quote": "41 per cent said they would previously have walked or cycled"
+        }
+      ],
+      "depends_on": [
+        "K1"
+      ],
+      "questions": {
+        "opening": "According to the Alliance's questionnaire, where did the extra riders come from?",
+        "focus": {
+          "E1": "What share of the extra riders used to go by car?",
+          "E2": "How did the other extra riders use to get around?"
+        },
+        "clarify": "Which part of the questionnaire are you thinking of?"
+      }
+    },
+    {
+      "id": "K3",
+      "role": "relationship",
+      "topic_label": "fuel prices",
+      "statement": "Rising petrol prices, and a 9 per cent rise in Eastholme without free fares, suggest part of Marlow Bay's growth may not be due to free travel.",
+      "elements": [
+        {
+          "id": "E1",
+          "label": "petrol prices rose that year"
+        },
+        {
+          "id": "E2",
+          "label": "bus use also rose 9 per cent in Eastholme without free fares"
+        }
+      ],
+      "relation": {
+        "type": "limits",
+        "from": "E1",
+        "to": "E2",
+        "direction": "E1 and E2 together limit the claim that free fares caused all of Marlow Bay's growth"
+      },
+      "evidence": [
+        {
+          "quote": "Petrol prices rose by almost a fifth during the spring"
+        },
+        {
+          "quote": "Bus journeys in Eastholme, a neighbouring city where fares were not removed, rose by 9 per cent"
+        }
+      ],
+      "depends_on": [
+        "K1"
+      ],
+      "questions": {
+        "opening": "Besides free travel, what else in the text could explain more people taking the bus?",
+        "focus": {
+          "E1": "What happened to the cost of fuel that year?",
+          "E2": "What happened to bus use in the neighbouring city?"
+        },
+        "link": "How does what happened next door affect the Alliance's claim?",
+        "clarify": "How does your answer connect to what the Alliance claims?"
+      }
+    },
+    {
+      "id": "K4",
+      "role": "limitation",
+      "topic_label": "roadworks",
+      "statement": "City-centre traffic may have fallen partly because of four months of roadworks, not only free buses.",
+      "elements": [
+        {
+          "id": "E1",
+          "label": "roadworks on a main road for four months"
+        },
+        {
+          "id": "E2",
+          "label": "could partly explain the fall in traffic"
+        }
+      ],
+      "evidence": [
+        {
+          "quote": "partly explained by roadworks on one of the three main roads"
+        }
+      ],
+      "depends_on": [
+        "K1"
+      ],
+      "questions": {
+        "opening": "What else might explain fewer cars coming into town?",
+        "focus": {
+          "E1": "What was happening on one of the main roads?",
+          "E2": "How might that affect the vehicle counts?"
+        },
+        "clarify": "Which part of the text are you thinking of?"
+      }
+    }
+  ]
+}

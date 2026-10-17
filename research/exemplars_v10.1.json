@@ -1,0 +1,120 @@
+{
+  "_readme": "AARC exemplar set v10.1. Passage: research/exemplar_passage_spacing.md (original text, CC BY 4.0, exemplar use only, never a formal evaluation passage). Items drafted by Claude (AI) on 15 Oct 2026 for the researcher's review. permission_confirmed is false until the researcher has reviewed each item; then set it to true and import in Model settings > Exemplar library. Process labels follow the PIRLS 2026 framework (Sabatini et al., 2024, pp. 12-15); adult informational tasks are informed by PISA 2018 (OECD, 2019, pp. 34-36).",
+  "passage_ref": "EXP-SPACING-01",
+  "exemplars": [
+    {
+      "id": "SP-P1",
+      "role": "positive",
+      "process": 1,
+      "text_type": "informational",
+      "skill": "retrieve a stated detail",
+      "passage_excerpt": "an adult article on the spacing effect: spreading study over time versus cramming",
+      "stem": "What did Ebbinghaus memorise in his experiments?",
+      "options": [
+        "Obscure facts",
+        "Foreign vocabulary",
+        "Lists of nonsense syllables",
+        "Simple mathematics procedures"
+      ],
+      "correct": "C",
+      "evidence": [
+        "he memorised lists of nonsense syllables"
+      ],
+      "process_rationale": "The answer is stated in one sentence and the stem and correct option use the text's own words (PIRLS 2026 p. 12: exact words within a sentence or two = focus on and retrieve; PISA 2018 p. 34: literal or close to literal matching).",
+      "distractor_notes": "All three distractors are materials the text DOES mention, for other studies (obscure facts: the online study; foreign vocabulary and mathematics procedures: later research), so the reader must locate the right sentence rather than recognise a familiar phrase.",
+      "permission_confirmed": false
+    },
+    {
+      "id": "SP-P2",
+      "role": "positive",
+      "process": 2,
+      "text_type": "informational",
+      "skill": "infer a consequence from a stated finding",
+      "passage_excerpt": "an adult article on the spacing effect: spreading study over time versus cramming",
+      "stem": "Based on the online study, what is most likely true of a person who must remember some facts for a year but reviews them one day after learning them?",
+      "options": [
+        "Their gap is shorter than ideal",
+        "Their gap is the ideal one for long-term memory",
+        "Their review is wasted, because a single review has no effect",
+        "They are certain to forget everything within a week"
+      ],
+      "correct": "A",
+      "evidence": [
+        "people tested after a year benefited most from a gap of several weeks"
+      ],
+      "process_rationale": "The text never says that a one-day gap is too short for a year. The reader must connect the stated finding (several weeks is best for a year) to the new case. The inference rests on one place in the text and the meaning stays clear (PIRLS 2026 p. 13). It is not a paraphrase of a stated sentence: the answer itself is nowhere in the text.",
+      "distractor_notes": "B reverses the finding; C is unsupported (the study shows that reviews help); D over-generalises from 'shorter than ideal' to total forgetting.",
+      "permission_confirmed": false
+    },
+    {
+      "id": "SP-P3",
+      "role": "positive",
+      "process": 3,
+      "text_type": "informational",
+      "skill": "integrate a causal explanation across paragraphs",
+      "passage_excerpt": "an adult article on the spacing effect: spreading study over time versus cramming",
+      "stem": "Taking paragraphs 4 and 5 together, why can a study method that feels easy be a poor guide to lasting learning?",
+      "options": [
+        "Easy methods work only for complex skills such as writing an argument",
+        "Feeling at ease means the learner has stopped paying attention",
+        "Rereading takes more total time than spacing the same material",
+        "Material reread straight away has not been forgotten, so there is no effortful recall to strengthen it"
+      ],
+      "correct": "D",
+      "evidence": [
+        "learners tend to mistake this ease for learning",
+        "this effort of recalling it is what strengthens the memory"
+      ],
+      "link": "Paragraph 4 says immediate rereading feels easy; paragraph 5 says the effort of recalling partly forgotten material strengthens memory. Together: the ease exists precisely because the effortful recall that builds memory is missing.",
+      "process_rationale": "No sentence states this causal chain. The reader must synthesise an explanation from two paragraphs: a concept (the ease and the missing effort are two sides of one process) that is grounded in the text but not written in it (PIRLS 2026 p. 14; PISA 2018 p. 35: causal coherence relationships across the passage). The answer reuses words from the text ('effortful recall'), which is allowed: what matters is that the relationship has to be built by the reader.",
+      "distractor_notes": "A misapplies a detail from the limitations paragraph; B is a plausible personal theory the text never offers; C contradicts the text's premise that total study time stays the same.",
+      "permission_confirmed": false
+    },
+    {
+      "id": "SP-P3-WEAK",
+      "role": "negative",
+      "process": 3,
+      "text_type": "informational",
+      "skill": "(none: retrieval of two separate facts)",
+      "passage_excerpt": "an adult article on the spacing effect: spreading study over time versus cramming",
+      "stem": "Which two facts are both stated in the passage?",
+      "options": [
+        "Ebbinghaus tested only himself, and the online study tested people up to a year later",
+        "Ebbinghaus tested only himself, and the online study tested people up to a week later",
+        "Ebbinghaus tested many students, and the online study tested people up to a year later",
+        "Ebbinghaus tested many students, and the online study tested people up to a week later"
+      ],
+      "correct": "A",
+      "evidence": [
+        "Using himself as the only participant",
+        "were then tested up to a year later"
+      ],
+      "why_bad": "This is NOT process 3. It staples together two unrelated facts from different paragraphs and asks the reader to retrieve each one; the options are a 2 x 2 grid of 'X and Y' combinations. No interpretation or synthesis is needed, and finding the two evidence spans in different paragraphs does not make it integration.",
+      "permission_confirmed": false
+    },
+    {
+      "id": "SP-P4",
+      "role": "positive",
+      "process": 4,
+      "text_type": "informational",
+      "skill": "judge how well a claim is supported",
+      "passage_excerpt": "an adult article on the spacing effect: spreading study over time versus cramming",
+      "stem": "Which statement best judges how well the author supports the claim that schools should build review into their timetables?",
+      "options": [
+        "Completely, because one study with more than a thousand adults proves that spacing works in schools",
+        "Reasonably well, because the research evidence is broad, and the author openly admits it still needs testing in real classrooms",
+        "Not at all, because Ebbinghaus was the only participant in his experiments",
+        "Poorly, because the author never discusses any weaknesses in the evidence"
+      ],
+      "correct": "B",
+      "evidence": [
+        "repeated in hundreds of studies",
+        "The evidence also has limits",
+        "What researchers still need are careful studies in real classrooms"
+      ],
+      "process_rationale": "The reader steps back from the content to judge the quality of the author's argument, weighing the strength of the evidence against the limitations the author states: a justified judgment about the text (PIRLS 2026 p. 15; PISA 2018 p. 35: assessing quality and credibility). Each option is a judgment plus a reason, and only one reason is supported by the text.",
+      "distractor_notes": "A over-states one study (obscure facts, online, not schools); C ignores the century of later evidence; D is contradicted by the paragraph on limits.",
+      "permission_confirmed": false
+    }
+  ]
+}

@@ -1,0 +1,145 @@
+{
+  "map_id": "TP03-MAP-TEST",
+  "passage_id": "TP-03",
+  "map_version": "test-fixture-1",
+  "review_status": "unreviewed",
+  "passage_type": "informational_explanatory",
+  "passage_type_reason": "The text explains how a process works (why bread rises), step by step, without arguing for a position.",
+  "note": "Hand-written test fixture. No 'conclusion' idea and no argument. Not reviewed for learner use.",
+  "ideas": [
+    {
+      "id": "K0",
+      "role": "main",
+      "topic_label": "the whole process",
+      "statement": "Bread rises because yeast makes gas, gluten traps it, and oven heat expands the gas before setting the loaf.",
+      "elements": [
+        { "id": "E1", "label": "yeast makes gas" },
+        { "id": "E2", "label": "gluten traps the gas" },
+        { "id": "E3", "label": "heat expands it, then sets the loaf" }
+      ],
+      "evidence": [
+        { "quote": "living yeast, a stretchy network of protein, and heat" },
+        { "quote": "The yeast must produce enough gas, the gluten must be strong enough to hold it" }
+      ],
+      "depends_on": [],
+      "questions": {
+        "opening": "What is the passage mainly explaining?",
+        "focus": {
+          "E1": "What does the yeast do in the dough?",
+          "E2": "What holds the gas inside the dough?",
+          "E3": "What does the oven do to the dough?"
+        },
+        "clarify": "Can you say a little more, using the passage?"
+      }
+    },
+    {
+      "id": "K1",
+      "role": "explanation",
+      "topic_label": "where the gas comes from",
+      "statement": "Yeast feeds on sugars, some made from flour starch by enzymes, and gives off carbon dioxide; this is fermentation.",
+      "elements": [
+        { "id": "E1", "label": "yeast feeds on sugars from the flour" },
+        { "id": "E2", "label": "it gives off carbon dioxide" }
+      ],
+      "relation": {
+        "type": "cause",
+        "from": "E1",
+        "to": "E2",
+        "direction": "Feeding on sugars (partly from broken-down starch) causes the yeast to release carbon dioxide"
+      },
+      "evidence": [
+        { "quote": "natural enzymes in the flour slowly break some of that starch down into sugars" },
+        { "quote": "As the yeast feeds, it gives off carbon dioxide gas" }
+      ],
+      "depends_on": ["K0"],
+      "questions": {
+        "opening": "Where does the gas in the dough come from?",
+        "focus": {
+          "E1": "What does the yeast feed on, and where does it come from?",
+          "E2": "What does the yeast give off as it feeds?"
+        },
+        "link": "How does the starch in flour end up as gas in the dough?",
+        "clarify": "Which part of the passage are you thinking of?"
+      }
+    },
+    {
+      "id": "K2",
+      "role": "relationship",
+      "topic_label": "gluten",
+      "statement": "Kneading builds a stretchy gluten network that traps the gas in pockets, so the dough swells.",
+      "elements": [
+        { "id": "E1", "label": "a stretchy gluten network forms, strengthened by kneading" },
+        { "id": "E2", "label": "it traps the gas so the dough swells" }
+      ],
+      "relation": {
+        "type": "cause",
+        "from": "E1",
+        "to": "E2",
+        "direction": "The gluten network holds the carbon dioxide, which makes the dough swell instead of the gas escaping"
+      },
+      "evidence": [
+        { "quote": "Kneading the dough lines up these protein strands" },
+        { "quote": "the gas collects in thousands of tiny pockets inside this net" }
+      ],
+      "depends_on": ["K1"],
+      "questions": {
+        "opening": "Why doesn't the gas simply escape from the dough?",
+        "focus": {
+          "E1": "What do glutenin and gliadin form when water is added?",
+          "E2": "What happens to the carbon dioxide inside that net?"
+        },
+        "link": "How does kneading affect how well the loaf rises?",
+        "clarify": "Which part of the passage are you thinking of?"
+      }
+    },
+    {
+      "id": "K3",
+      "role": "detail",
+      "topic_label": "speed of rising",
+      "statement": "Temperature sets the speed: warmth speeds fermentation, too much heat kills the yeast, and salt slows it slightly.",
+      "elements": [
+        { "id": "E1", "label": "warmth speeds the yeast up, cool slows it" },
+        { "id": "E2", "label": "too hot kills the yeast" },
+        { "id": "E3", "label": "salt slows it and tightens the gluten" }
+      ],
+      "evidence": [
+        { "quote": "In a warm place, at around body temperature, the yeast works much faster" },
+        { "quote": "If the dough becomes too hot, however, the yeast dies" },
+        { "quote": "It slows the yeast down slightly and tightens the gluten" }
+      ],
+      "depends_on": ["K1"],
+      "questions": {
+        "opening": "How can a baker make the dough rise faster or slower?",
+        "focus": {
+          "E1": "What happens to the dough in a warm room?",
+          "E2": "What happens to the yeast if the dough gets very hot?",
+          "E3": "Why do recipes measure the salt carefully?"
+        },
+        "clarify": "Which part of the passage are you thinking of?"
+      }
+    },
+    {
+      "id": "K4",
+      "role": "explanation",
+      "topic_label": "baking",
+      "statement": "In the oven, heat expands the gas (oven spring), then kills the yeast and sets the starch and gluten, fixing the holes.",
+      "elements": [
+        { "id": "E1", "label": "heat makes the gas expand, a last rise" },
+        { "id": "E2", "label": "then the structure sets, fixing the holes" }
+      ],
+      "evidence": [
+        { "quote": "The heat makes the trapped gas expand" },
+        { "quote": "the gluten firms up, fixing the holes in place" }
+      ],
+      "depends_on": ["K2"],
+      "questions": {
+        "opening": "What happens to the dough once it goes into the oven?",
+        "focus": {
+          "E1": "Why does the loaf rise once more in the oven?",
+          "E2": "What stops the loaf from collapsing after baking?"
+        },
+        "clarify": "Which part of the passage are you thinking of?"
+      }
+    }
+  ]
+}

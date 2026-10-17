@@ -1,0 +1,22 @@
+{
+  "_readme": "Exemplar library template. Fill in your own items, set permission_confirmed to true ONLY for items you have the right to reuse, then import in Model settings > Exemplar library. Only confirmed items are ever shown to the model (1 per process). The entry below is an invented placeholder, not a PIRLS item.",
+  "exemplars": [
+    {
+      "id": "EX-PLACEHOLDER-P2",
+      "process": 2,
+      "text_type": "narrative",
+      "skill": "infer a character's feeling",
+      "passage_excerpt": "a boy who hides his drawing when his sister walks in",
+      "stem": "Why does Leo cover his drawing when Mia comes in?",
+      "options": [
+        "He wants the drawing to be a surprise for her",
+        "He has finished the drawing",
+        "He thinks Mia will tear it",
+        "He wants Mia to help him colour it"
+      ],
+      "correct": "A",
+      "source": "Invented placeholder by the developer",
+      "permission_confirmed": false
+    }
+  ]
+}

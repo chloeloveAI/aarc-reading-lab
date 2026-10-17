@@ -1,0 +1,26 @@
+{
+  "purpose": "Development samples for the AGS Testing Lab UI (Phase 4). Both maps are hand-written, UNREVIEWED and for development only.",
+  "samples": [
+    {
+      "id": "TP-01",
+      "title": "Free Buses, Full Seats?",
+      "passage_type": "informational_argumentative",
+      "passage_file": "research/test_passage_free_buses.md",
+      "map_file": "tests/fixtures/tp01_map.json"
+    },
+    {
+      "id": "TP-02",
+      "title": "The Last Repair",
+      "passage_type": "narrative",
+      "passage_file": "research/test_passage_last_repair.md",
+      "map_file": "tests/fixtures/tp02_map.json"
+    },
+    {
+      "id": "TP-03",
+      "title": "Why Bread Rises",
+      "passage_type": "informational_explanatory",
+      "passage_file": "research/test_passage_bread.md",
+      "map_file": "tests/fixtures/tp03_map.json"
+    }
+  ]
+}

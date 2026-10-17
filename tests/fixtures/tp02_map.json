@@ -1,0 +1,134 @@
+{
+  "map_id": "TP02-MAP-TEST",
+  "passage_id": "TP-02",
+  "map_version": "test-fixture-1",
+  "review_status": "unreviewed",
+  "passage_type": "narrative",
+  "passage_type_reason": "A story with two characters, a central problem and a sequence of events.",
+  "note": "Hand-written test fixture for the genre tests. No theme idea on purpose: the story states no moral. Not reviewed for learner use.",
+  "ideas": [
+    {
+      "id": "K0",
+      "role": "main",
+      "topic_label": "the story overall",
+      "statement": "An old watch repairer whose market stall is closing helps a young courier, Mei, mend her grandmother's watch herself.",
+      "elements": [
+        { "id": "E1", "label": "Mr Lo, a repairer whose stall is closing" },
+        { "id": "E2", "label": "Mei repairs her grandmother's watch with his help" }
+      ],
+      "evidence": [
+        { "quote": "the market would close on Friday" },
+        { "quote": "guided her hands while she lifted out the broken wheel" }
+      ],
+      "depends_on": [],
+      "questions": {
+        "opening": "What is this story mainly about?",
+        "focus": {
+          "E1": "Who is Mr Lo, and what is happening to his stall?",
+          "E2": "What does Mei end up doing with the broken watch?"
+        },
+        "clarify": "Can you say a little more, using the story?"
+      }
+    },
+    {
+      "id": "K1",
+      "role": "conflict",
+      "topic_label": "the problem",
+      "statement": "Mei needs the watch working for her sister's wedding on Saturday, but Mr Lo refuses because his stall closes on Friday.",
+      "elements": [
+        { "id": "E1", "label": "Mei wants it for the Saturday wedding" },
+        { "id": "E2", "label": "Mr Lo refuses: no stall left to finish the work" }
+      ],
+      "evidence": [
+        { "quote": "Her sister was getting married on Saturday, and Mei wanted her to wear it" },
+        { "quote": "by Friday there would be no stall to finish it at" }
+      ],
+      "depends_on": ["K0"],
+      "questions": {
+        "opening": "What problem stands between Mei and her plan for the watch?",
+        "focus": {
+          "E1": "Why does Mei want the watch fixed this week?",
+          "E2": "Why does Mr Lo refuse to open the watch?"
+        },
+        "clarify": "Which part of the story are you thinking of?"
+      }
+    },
+    {
+      "id": "K2",
+      "role": "motivation",
+      "topic_label": "Mr Lo's change of mind",
+      "statement": "Mr Lo changes his mind after Mei shows she has taught herself about watch parts, which reminds him of how he learned.",
+      "elements": [
+        { "id": "E1", "label": "Mei shows she taught herself about the parts" },
+        { "id": "E2", "label": "Mr Lo agrees to help after all" }
+      ],
+      "relation": {
+        "type": "cause",
+        "from": "E1",
+        "to": "E2",
+        "direction": "Mei's self-taught knowledge, so like his own way of learning, leads Mr Lo to help"
+      },
+      "evidence": [
+        { "quote": "asked whether the one with the missing tooth was the escape wheel" },
+        { "quote": "He had learned the same way" },
+        { "quote": "On Thursday he unwrapped the biscuit tin" }
+      ],
+      "depends_on": ["K1"],
+      "questions": {
+        "opening": "What makes Mr Lo change his mind about the watch?",
+        "focus": {
+          "E1": "What does Mei ask about the tray of tiny wheels?",
+          "E2": "What does Mr Lo do with the biscuit tin on Thursday?"
+        },
+        "link": "How is Mei's way of learning connected to Mr Lo's own past?",
+        "clarify": "Which part of the story are you thinking of?"
+      }
+    },
+    {
+      "id": "K3",
+      "role": "event",
+      "topic_label": "the repair",
+      "statement": "Mr Lo does not fix the watch himself; he guides Mei's hands while she replaces the broken wheel.",
+      "elements": [
+        { "id": "E1", "label": "he guides instead of repairing it himself" },
+        { "id": "E2", "label": "Mei replaces the broken wheel" }
+      ],
+      "evidence": [
+        { "quote": "He did not repair the watch" },
+        { "quote": "fitted the one he had kept in a matchbox for twenty years" }
+      ],
+      "depends_on": ["K2"],
+      "questions": {
+        "opening": "Who actually does the repair work on Thursday?",
+        "focus": {
+          "E1": "What is Mr Lo's part in the repair?",
+          "E2": "What does Mei herself do to the watch?"
+        },
+        "clarify": "Which part of the story are you thinking of?"
+      }
+    },
+    {
+      "id": "K4",
+      "role": "resolution",
+      "topic_label": "the ending",
+      "statement": "The watch works but runs two minutes slow; Mr Lo gives Mei his loupe and says it is close enough for the wedding.",
+      "elements": [
+        { "id": "E1", "label": "the watch ticks but loses two minutes a day" },
+        { "id": "E2", "label": "Mr Lo gives Mei his loupe" }
+      ],
+      "evidence": [
+        { "quote": "It lost about two minutes a day" },
+        { "quote": "Mr Lo pressed the loupe into her hand" }
+      ],
+      "depends_on": ["K3"],
+      "questions": {
+        "opening": "How do things stand when Mei leaves the market on Friday?",
+        "focus": {
+          "E1": "How well does the watch keep time in the end?",
+          "E2": "What does Mr Lo give Mei before she goes?"
+        },
+        "clarify": "Which part of the story are you thinking of?"
+      }
+    }
+  ]
+}
