@@ -158,7 +158,7 @@ export function logAnnotation(a) {
 export const STRUCTURAL_CHECKS = ["four_options", "single_key", "distinct_options", "stem_complete", "anchor_found", "anchor2_found", "anchor2_distinct", "cross_paragraph"];
 export const SURFACE_CONTENT_CHECKS = ["not_copied", "not_combo_grid", "not_duplicate", "distinct_evidence"];
 /* coverage (v10.4): evidence from the planned quarter; targeted items use the reader's focus */
-export const COVERAGE_CHECKS = ["in_target_quarter", "focus_addressed", "location_consistent"];
+export const COVERAGE_CHECKS = ["in_target_quarter", "focus_addressed", "location_consistent", "no_planning_labels"];
 
 export function logSummary() {
   const log = loadLog();
@@ -194,7 +194,7 @@ export function exportLogJSON(extra = {}) {
 }
 
 /* one row per candidate — accepted and rejected — with its run's settings */
-const CHECKS = ["four_options", "single_key", "distinct_options", "stem_complete", "anchor_found", "not_copied", "anchor2_found", "anchor2_distinct", "cross_paragraph", "not_combo_grid", "not_duplicate", "distinct_evidence", "in_target_quarter", "focus_addressed", "location_consistent"];
+const CHECKS = ["four_options", "single_key", "distinct_options", "stem_complete", "anchor_found", "not_copied", "anchor2_found", "anchor2_distinct", "cross_paragraph", "not_combo_grid", "not_duplicate", "distinct_evidence", "in_target_quarter", "focus_addressed", "location_consistent", "no_planning_labels"];
 
 export function exportCandidatesCSV() {
   const log = loadLog();

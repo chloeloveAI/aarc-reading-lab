@@ -526,6 +526,12 @@ function checkItem(item, structure, { l3Strict = true } = {}) {
   checks.anchor_found = !!a;
   if (!a) reasons.push(item.anchor ? "Evidence span not found in the passage" : "No evidence span given");
 
+  /* v10.4: planning labels ("Q2", "quarter 3") must never reach the reader, in any field */
+  const QLABEL = /\bQ[1-4]\b|\bquarters?\s*[1-4]\b|\bquarter (one|two|three|four)\b/i;
+  const shown = [item.stem, item.link, item.hint, item.guide, item.takeaway, item.keyword_meaning, ...(item.options || []).flatMap((o) => [o.text, o.why])];
+  checks.no_planning_labels = !shown.some((t) => QLABEL.test(String(t || "")));
+  if (!checks.no_planning_labels) reasons.push("Mentions a quarter label (Q1–Q4), which is for planning only");
+
   /* v10.4: if the stem names a section ("the final section", "Section 3"), the evidence must be there */
   checks.location_consistent = null;
   if (a && a.section) {
@@ -605,11 +611,15 @@ const STRATEGY = {
   4: "This question asks you to judge the text, not just find something in it. Think about how strong the evidence is, what is missing, or why the writer chose these words.",
 };
 function hintSteps(item, where, where2) {
+  /* strategy → guiding question → where to look (strong help) → key word.
+     The key word comes last: it is taken from the evidence sentence, so it
+     can't be answered without knowing where it is, and searching for it
+     would lead straight to the evidence. */
   const steps = [{ kind: "strategy" }];
-  if (item.keyword) steps.push({ kind: "keyword" });
   if (item.guide) steps.push({ kind: "guide" });
   if (where?.section) steps.push({ kind: "section" });
   else if (item.hint) steps.push({ kind: "locator" });
+  if (item.keyword) steps.push({ kind: "keyword" });
   return steps;
 }
 const LOCATION_KINDS = ["section", "locator", "paragraph", "evidence"];

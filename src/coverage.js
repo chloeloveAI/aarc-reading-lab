@@ -232,7 +232,9 @@ const ORDINALS = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6,
 export function stemLocationProblem(stem, anchorSection, totalSections) {
   const s = String(stem || "").toLowerCase();
   if (!anchorSection || !totalSections) return "";
-  if (/\bquarter\b/.test(s)) return "The question mentions a 'quarter' of the text (planning marker, not part of the text)";
+  /* only planning labels: "a quarter of the cost" is ordinary language and stays allowed */
+  if (/\bq[1-4]\b|\bquarters?\s*[1-4]\b|\b(first|second|third|fourth|last|final) quarter of the (text|passage|article)\b/.test(s))
+    return "The question mentions a quarter of the text (planning marker, not part of the text)";
   const named = [];
   if (/\b(final|last|concluding|closing)\s+(section|part)\b/.test(s)) named.push(totalSections);
   if (/\b(opening|introductory)\s+(section|part)\b|\bfirst\s+section\b|\bthe introduction\b/.test(s)) named.push(1);

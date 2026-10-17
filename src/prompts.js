@@ -136,7 +136,7 @@ function coverageBlock(slots, usedAnchors) {
 COVERAGE PLAN. The text is split into four quarters, each starting with a line like [QUARTER 2 OF 4 STARTS HERE]. Those marker lines are not part of the text: never copy them into an anchor. Write the items in this order:
 ${lines.join("\n")}
 Every item must test a DIFFERENT idea and use DIFFERENT evidence from the other items.
-The quarter markers are for planning only: never mention quarters in a stem. If a stem names a part of the text (e.g. 'the final section', 'Section 3'), it must be exactly where the anchor is — check the section headings before naming one.${
+The quarter markers are for planning only: never mention quarters or labels like 'Q1' anywhere in an item (stem, options, "why", "link", hints). If a stem names a part of the text (e.g. 'the final section', 'Section 3'), it must be exactly where the anchor is — check the section headings before naming one.${
     usedAnchors && usedAnchors.length
       ? `\nEvidence already used by earlier questions — choose other evidence: ${usedAnchors.map((a) => `'${q(a).slice(0, 120)}'`).join("; ")}`
       : ""
