@@ -5,7 +5,7 @@
    good items for the planned quarter; that needs a real run. */
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
-import { lineQuarters, quarterStarts, passageWithQuarters, buildBlueprint, blueprintSummary, rankFocus, maxTargeted, stemLocationProblem, keyPlan, placeKey } from "../src/coverage.js";
+import { quarterMap, lineQuarters, quarterStarts, passageWithQuarters, buildBlueprint, blueprintSummary, rankFocus, maxTargeted, stemLocationProblem, keyPlan, placeKey } from "../src/coverage.js";
 import { textUpTo, buildTutorPrompt } from "../src/tutor.js";
 import { buildItemPromptV10 } from "../src/prompts.js";
 import { coachLeak } from "../src/coach.js";
@@ -32,11 +32,38 @@ test("C1", "Every quarter 1–4 is used and quarters never go backwards", () => 
   return `quarters start at lines ${JSON.stringify(quarterStarts(LINES))}`;
 });
 
+const squash = (t) => t.replace(/\s+/g, "");
 test("C2", "Quarter markers are added on their own lines; the text is unchanged", () => {
   const marked = passageWithQuarters(LINES);
   const markers = marked.split("\n").filter((l) => /^\[QUARTER \d OF 4 STARTS HERE\]$/.test(l));
   assert.equal(markers.length, 4);
-  assert.equal(marked.split("\n").filter((l) => !/^\[QUARTER/.test(l)).join("\n"), LINES.join("\n"));
+  assert.equal(squash(marked.split("\n").filter((l) => !/^\[QUARTER/.test(l)).join("\n")), squash(LINES.join("\n")));
+});
+
+/* the case that failed in the preview: few, very long paragraphs */
+const LONG = [
+  "AI and learning",
+  Array.from({ length: 14 }, (_, i) => `Sentence ${i + 1} of the first paragraph talks about artificial intelligence in schools and what the results show.`).join(" "),
+  Array.from({ length: 3 }, (_, i) => `Short paragraph sentence ${i + 1} about research gaps.`).join(" "),
+  Array.from({ length: 6 }, (_, i) => `Closing sentence ${i + 1} about what teachers should do next with these findings.`).join(" "),
+];
+test("C9", "Long paragraphs: every quarter still gets a marker (cut at a sentence boundary)", () => {
+  const marked = passageWithQuarters(LONG);
+  for (let q = 1; q <= 4; q++) assert.ok(marked.includes(`[QUARTER ${q} OF 4 STARTS HERE]`), "missing quarter " + q);
+  assert.equal(squash(marked.split("\n").filter((l) => !/^\[QUARTER/.test(l)).join("")), squash(LONG.join("")));
+  const qm = quarterMap(LONG);
+  assert.deepEqual(qm.available, [1, 2, 3, 4]);
+  const mid = LONG[1].toLowerCase().indexOf("sentence 10 of");
+  assert.equal(qm.posQuarter(1, mid), 2);
+  return "markers inside paragraph 1: " + marked.split("\n").filter((l) => /^\[QUARTER/.test(l)).length;
+});
+test("C10", "A very short text uses only the quarters it has; the plan never asks for a missing one", () => {
+  const tiny = ["One short sentence about buses.", "Another short sentence about fares."];
+  const qm = quarterMap(tiny);
+  assert.ok(qm.available.length < 4);
+  const b = buildBlueprint([1, 2, 2, 1], [], qm.available);
+  assert.ok(b.every((sl) => qm.available.includes(sl.quarter)));
+  return "available " + qm.available.join(",");
 });
 
 test("C3", "6-question plan (1·2·2·1): every quarter used, loads differ by at most 1", () => {
