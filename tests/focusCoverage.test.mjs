@@ -5,7 +5,7 @@
    good items for the planned quarter; that needs a real run. */
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
-import { lineQuarters, quarterStarts, passageWithQuarters, buildBlueprint, blueprintSummary, rankFocus, maxTargeted } from "../src/coverage.js";
+import { lineQuarters, quarterStarts, passageWithQuarters, buildBlueprint, blueprintSummary, rankFocus, maxTargeted, stemLocationProblem, keyPlan, placeKey } from "../src/coverage.js";
 import { textUpTo, buildTutorPrompt } from "../src/tutor.js";
 import { buildItemPromptV10 } from "../src/prompts.js";
 
@@ -131,6 +131,33 @@ test("P2", "Item prompt for the log keeps the passage token, not the marked text
   const p = buildItemPromptV10({ level: 1, count: 1, passage: PASSAGE, markedPassage: passageWithQuarters(LINES), slots: [{ quarter: 1 }], forLog: true });
   assert.ok(!p.includes("[QUARTER 1 OF 4 STARTS HERE]"));
   assert.match(p, /<<PASSAGE>>/);
+});
+
+test("L1", "Stem naming the final section is rejected when the evidence is in an earlier section", () => {
+  assert.match(stemLocationProblem("Why does the author mention roadworks in the final section?", 8, 9), /section 9 .* section 8/);
+  assert.equal(stemLocationProblem("Why does the author mention roadworks in the final section?", 9, 9), "");
+  assert.equal(stemLocationProblem("In Section 3, what does 'centre' mean?", 3, 9), "");
+  assert.match(stemLocationProblem("In the third section, why…?", 5, 9), /names section 3/);
+  assert.match(stemLocationProblem("What does the last quarter suggest?", 9, 9), /quarter/);
+  assert.equal(stemLocationProblem("Why does the author mention roadworks?", 8, 9), "");
+});
+
+test("K1", "Answer key: every block of four candidates uses A, B, C and D once; same run → same order", () => {
+  const plan = keyPlan("R20261017-test");
+  assert.deepEqual([...plan].sort(), [0, 1, 2, 3]);
+  assert.deepEqual(keyPlan("R20261017-test"), plan);
+  const opts = [{ text: "right", correct: true }, { text: "b" }, { text: "c" }, { text: "d" }];
+  const seen = new Set();
+  for (let k = 0; k < 4; k++) {
+    const r = placeKey(opts, plan[k], "C" + k);
+    assert.equal(r.options.length, 4);
+    assert.equal(r.options.filter((o) => o.correct).length, 1);
+    assert.equal(r.options[plan[k]].text, "right");
+    assert.equal(r.from, 0);
+    seen.add(r.options.findIndex((o) => o.correct));
+  }
+  assert.equal(seen.size, 4);
+  return "plan " + plan.map((i) => "ABCD"[i]).join("");
 });
 
 const passed = results.filter((r) => r.pass).length;
