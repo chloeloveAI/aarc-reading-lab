@@ -51,7 +51,34 @@ Prompt `items-v10.3` · validator `validator-v10.2` · coverage `coverage-v2` ·
 - New check `no_planning_labels`: an item is rejected if any text the reader sees (stem, options, "why", link, hints) contains a quarter label such as "Q1" or "quarter 3". The earlier stem check rejected every "quarter"; ordinary phrases like "a quarter of the cost" are now allowed.
 
 ## 8. Tests
-- New: `tests/focusCoverage.test.mjs` (17 deterministic cases: quarters, the coverage plan, the tutor's read-so-far text, the coverage block in the prompt, section-name check, answer-key positions, the coach's leak check, long-paragraph and short-text quarters).
+- New: `tests/focusCoverage.test.mjs` (20 deterministic cases: quarters, the coverage plan, the tutor's read-so-far text, the coverage block in the prompt, section-name check, answer-key positions, the coach's leak check, long-paragraph and short-text quarters, and the written question: W1–W3).
+
+## 10. Evidence marked at sentence level after answering
+- After a right or wrong answer, the passage marks only the 1–3 sentences that hold the evidence, in **bold** with a light highlight — never the whole paragraph. Before, when the model's evidence quote did not match the text word for word, the whole paragraph was tinted.
+- Exact quote → every sentence the quote touches. Quote not exact → the run of 1–3 sentences that contains most of the quote's content words. Process 3 marks the sentences for both pieces of evidence.
+- Sentence splitting ignores "e.g.", "i.e.", "Dr.", initials, and full stops followed by a lower-case word. Pure functions `sentenceSpans` and `evidenceSpans` in `src/coverage.js`; test E1.
+
+## 12. Choosing by letter; word meanings in the question and options; coach knows her choice (coach-v2)
+- **Only the letter chooses.** Each option has a large A/B/C/D button ("choose") on its left. Every word in the question and in the options can now be tapped for its meaning, before and after answering, without choosing that option by mistake.
+- **"What is this question asking?"** under every question opens the question coach on the question itself. Before answering, the coach rephrases the question in simpler words and names the kind of answer wanted (`kind: "clarify"`), without hinting at the answer or the place. It still counts as help (logged with `about: "question"`, so it can be separated from help about the text).
+- **The coach knows her choice.** After answering, the prompt says which letter she chose and whether it was wrong. For a wrong answer the coach first explains why her option does not fit the text, then why the correct one does. Ready-made questions: "Why is my answer (A) wrong?", "Why is B right?". The link under the question reads "Ask the coach why my answer is wrong". (Before, the coach did not know her choice and could wrongly say she had chosen the correct answer.)
+- **Research log:** each answer now saves `lookups` (words she looked up before answering, and where: stem, option or passage). Word look-ups are not counted as help.
+- Test Q2.
+
+## 11. Key-word hint marks the word in the text
+- When she opens the last hint ("Think about '…'"), the key word is also marked in the passage (bold, amber), and the panel scrolls to it. Header: "Narrowed to Section n · key word marked".
+- Only the occurrence inside the evidence sentence is marked (so a common word is not lit up across the paragraph). If the word is not in the evidence sentence, its occurrences in the evidence section are marked. Endings are allowed ("log" matches "logs").
+- After she answers, the key-word mark gives way to the evidence sentence(s) in bold.
+- For the research data: the key-word hint now also shows the location exactly, so treat it as location help (it already came after "where to look").
+
+## 9. Written question (written-v2, `src/written.js`)
+- **Premise check.** After the written question is generated, a second call checks that everything it names (framework, finding, contradiction, link) exists in the text in that role. If not, the question is regenerated once with the problems listed. The check result is logged either way (`premise.ok`, `premise.regenerated`, `premise.attempts`).
+- **The strong answer is never empty.** The marking reply is read under several field names (`model`, `model_answer`, `strong_answer`…); if none is there, one extra call writes the strong answer.
+- **One revision first.** After feedback she gets "Try once more" with the nudge. She revises (or chooses "Skip, show me"). Only then are the improved answer and the strong answer shown.
+- **"Your answer, improved".** Built from her revision (or first answer if skipped): her words are kept, added or changed parts are highlighted and numbered, each with a short reason. `kept_share` records how much of her wording survived.
+- **Saved automatically.** Her first answer is saved the moment she submits (before the marking call, so a failed call never loses it), then the mark, the revision and the improved/strong answers as each arrives. Saved in the session (so "Resume" goes back to exactly where she was) and in the research log (`written_answers`).
+- **Review screen** now shows the written question: first answer with its verdict, revision, improved answer and strong answer. If the written question is unfinished, a link returns to it. Resuming a session whose multiple-choice questions are all answered opens the written question if unfinished, otherwise the review.
+- **New export:** "Written answers (CSV)", one row per written answer. The merge tool also combines `written_answers`.
 
 # Changes — 15 Oct 2026
 
