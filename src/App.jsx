@@ -36,10 +36,13 @@ import {
   exportLogJSON,
   exportCandidatesCSV,
   exportReadingCSV,
+  exportWrittenCSV,
   logReading,
+  logWritten,
 } from "./research";
 import FocusReading from "./FocusReading";
-import { quarterMap, normLine, passageWithQuarters, buildBlueprint, blueprintSummary, COVERAGE_VERSION, stemLocationProblem, keyPlan, placeKey } from "./coverage";
+import { checkPremise, markAnswer, improveAnswer, strongAnswer, WRITTEN_VERSION } from "./written";
+import { quarterMap, normLine, passageWithQuarters, buildBlueprint, blueprintSummary, COVERAGE_VERSION, stemLocationProblem, keyPlan, placeKey, evidenceSpans } from "./coverage";
 import { loadFlags, exportFlagsCSV, exportFlagsJSON, agreement } from "./flags";
 import {
   complete,
@@ -142,7 +145,7 @@ function trimPassage(text) {
 
 /* The item-generation prompt lives in prompts.js (versioned: PROMPT_VERSION). */
 
-function buildOpenPrompt(prompt, passage) {
+function buildOpenPrompt(prompt, passage, problems = []) {
   return `Write ONE open-ended written-response question about the passage below, at PIRLS process 4 (evaluate and critique) / PISA "evaluate and reflect".
 
 <question>
@@ -154,6 +157,9 @@ ${trimPassage(passage)}
 </passage>
 
 The question must require the learner to take a position and defend it with evidence from the passage — for example weighing a trade-off the passage leaves implicit, judging where the advice would break down, or deciding what she would do differently and why. It must not be answerable with recall.
+Only name things the passage actually contains, in the role the passage gives them: do not call a problem a "framework", do not invent a finding, contradiction or link the passage does not support.${
+    problems.length ? `\n\nAn earlier version of this question was rejected because:\n- ${problems.join("\n- ")}\nWrite a different question that avoids these problems.` : ""
+  }
 
 Return ONLY JSON:
 {"stem":"...","criteria":["...","...","..."]}
@@ -351,7 +357,7 @@ function findAnchor(lines, anchor) {
         from = k + pc.length;
         return true;
       });
-      if (ok) return { line: i, exact: true, needle: pieces[0], ellipsis: true };
+      if (ok) return { line: i, exact: true, needle: pieces[0], pieces, ellipsis: true };
     }
   const words = a.split(" ").filter((w) => w.length > 4);
   if (words.length < 2) return null;
@@ -650,8 +656,8 @@ function Fonts() {
 @import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Public+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;700&display=swap');
 .ql-focus:focus-visible { outline: 2px solid ${C.teal}; outline-offset: 2px; }
 .ql-bubble { transition: transform .18s ease, background-color .18s ease, border-color .18s ease; }
-.ql-opt:hover .ql-bubble { transform: scale(1.08); }
-@media (prefers-reduced-motion: reduce) { .ql-bubble { transition: none; } .ql-opt:hover .ql-bubble { transform: none; } }
+.ql-choose:not(:disabled):hover .ql-bubble { transform: scale(1.1); background: #16202b; color: #fff; }
+@media (prefers-reduced-motion: reduce) { .ql-bubble { transition: none; } .ql-choose:hover .ql-bubble { transform: none; } }
 textarea::placeholder { color: ${C.mute}; }
 `}</style>
   );
@@ -728,13 +734,40 @@ function Climb({ counts, answered, current }) {
 
 /* focus: "none" | "section" | "paragraph" | "sentence" — how much of the
    evidence location the learner has earned so far. */
-function PassagePanel({ prompt, structure, compact, where, where2, focus, onWord, onSelect }) {
+/* where a key word sits in a line: case-insensitive, flexible spaces, any ending ("log" → "logs") */
+function keywordSpans(line, kw) {
+  const words = String(kw || "").replace(/["“”‘’]/g, "").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const esc = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp("\\b" + words.map(esc).join("[\\s-]+") + "[\\w'-]*", "gi");
+  const out = [];
+  let m;
+  while ((m = re.exec(line))) {
+    out.push({ from: m.index, to: m.index + m[0].length });
+    if (!m[0]) re.lastIndex++;
+  }
+  return out;
+}
+
+function PassagePanel({ prompt, structure, compact, where, where2, focus, keyword = "", onWord, onSelect }) {
   const { lines, heading, sectionOf, paraOf, sections } = structure;
   const hit = focus === "none" || !where ? null : where;
   /* v10.4: process 3 — the second place is shown at every step, like the first */
   const hit2 = hit && where2 ? where2 : null;
   const box = useRef(null);
   const lineEls = useRef({});
+
+  /* key-word hint (the last step): mark the word where the evidence is.
+     Evidence line(s) first; if the word is not there, its place in the section. */
+  const kwLines = useMemo(() => {
+    if (!keyword || !hit || focus === "sentence") return new Set();
+    const strip = (l) => l.replace(/\*\*/g, "");
+    const ev = [hit, hit2].filter(Boolean).map((h) => h.line).filter((i) => keywordSpans(strip(lines[i]), keyword).length);
+    if (ev.length) return new Set(ev);
+    const secs = new Set([hit, hit2].filter((h) => h && h.section).map((h) => h.section.n - 1));
+    return new Set(lines.map((_, i) => i).filter((i) => secs.has(sectionOf[i]) && keywordSpans(strip(lines[i]), keyword).length));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyword, hit?.line, hit2?.line, focus, lines]);
 
   const inSec1 = (h, i) => h && h.section && sectionOf[i] === h.section.n - 1;
   const inSection = (i) => inSec1(hit, i) || inSec1(hit2, i);
@@ -746,32 +779,47 @@ function PassagePanel({ prompt, structure, compact, where, where2, focus, onWord
     let target = hit.line;
     if (focus === "section" && hit.section) target = hit.section.start;
     if (focus === "paragraph" && hit.para) target = lines.findIndex((_, i) => inPara(i));
+    if (kwLines.size) target = Math.min(...kwLines);
     const el = lineEls.current[target];
     if (el) box.current.scrollTo({ top: Math.max(0, el.offsetTop - 16), behavior: "smooth" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, hit?.line, hit?.section?.n, hit?.para]);
+  }, [focus, hit?.line, hit?.section?.n, hit?.para, kwLines]);
 
   const renderLine = (line, i) => {
-    /* exact hit → highlight just the span; fuzzy → tint the line */
-    const spans = focus === "sentence"
-      ? [hit, hit2]
-          .filter((h) => h && h.line === i && h.exact)
-          .map((h) => ({ from: norm(line).indexOf(h.needle), len: h.needle.length }))
-          .filter((m) => m.from > -1)
-          .sort((a, b) => a.from - b.from)
-      : [];
+    /* v10.4: evidence is marked at SENTENCE level — the 1–3 sentences that
+       hold it, in bold — never the whole paragraph */
+    const spans = focus === "sentence" ? evidenceSpans(line, [hit, hit2].filter((h) => h && h.line === i)) : [];
+    let kws = !spans.length && kwLines.has(i) ? keywordSpans(line, keyword) : [];
+    /* on an evidence line, only the word inside the evidence sentence(s) */
+    const evHere = kws.length ? evidenceSpans(line, [hit, hit2].filter((h) => h && h.line === i)) : [];
+    const inEv = kws.filter((m) => evHere.some((e) => m.from >= e.from && m.to <= e.to));
+    if (inEv.length) kws = inEv;
+    if (kws.length) {
+      const parts = [];
+      let pos = 0;
+      kws.forEach((m, k) => {
+        if (m.from > pos) parts.push(<Words key={"t" + k} text={line.slice(pos, m.from)} onWord={onWord} />);
+        parts.push(
+          <mark key={"k" + k} data-keyword="1" style={{ background: C.amber, color: C.ink, fontWeight: 700, padding: "1px 3px", borderRadius: 2 }}>
+            <Words text={line.slice(m.from, m.to)} onWord={onWord} />
+          </mark>
+        );
+        pos = m.to;
+      });
+      parts.push(<Words key="end" text={line.slice(pos)} onWord={onWord} />);
+      return <>{parts}</>;
+    }
     if (spans.length) {
       const parts = [];
       let pos = 0;
       spans.forEach((m, k) => {
-        const from = Math.max(m.from, pos);
-        if (from > pos) parts.push(<Words key={"t" + k} text={line.slice(pos, from)} onWord={onWord} />);
+        if (m.from > pos) parts.push(<Words key={"t" + k} text={line.slice(pos, m.from)} onWord={onWord} />);
         parts.push(
-          <mark key={"m" + k} style={{ background: C.amber, padding: "1px 2px", borderRadius: 2 }}>
-            <Words text={line.slice(from, m.from + m.len)} onWord={onWord} />
+          <mark key={"m" + k} data-evidence="1" style={{ background: C.amberSoft, color: C.ink, fontWeight: 700, padding: "1px 2px", borderRadius: 2, boxShadow: `inset 0 -2px 0 ${C.amber}` }}>
+            <Words text={line.slice(m.from, m.to)} onWord={onWord} />
           </mark>
         );
-        pos = Math.max(pos, m.from + m.len);
+        pos = m.to;
       });
       parts.push(<Words key="end" text={line.slice(pos)} onWord={onWord} />);
       return <>{parts}</>;
@@ -796,7 +844,7 @@ function PassagePanel({ prompt, structure, compact, where, where2, focus, onWord
               if (focus === "sentence") return places.length > 1 ? "Both pieces of evidence marked" : "Evidence marked";
               if (focus === "paragraph") return "Narrowed to " + places.map((h) => short(h) + ", paragraph " + (h.para || 1)).join(" and ");
               const secs = [...new Set(places.map((h) => sectionLabel(h.section)))];
-              return "Narrowed to " + secs.join(" and ");
+              return "Narrowed to " + secs.join(" and ") + (kwLines.size ? " · key word marked" : "");
             })()}
           </span>
         </div>
@@ -833,7 +881,7 @@ function PassagePanel({ prompt, structure, compact, where, where2, focus, onWord
           const isHead = heading[i];
           const isCode = /^\s*(\||```|\s{4})/.test(line);
           const sectionBand = focus === "section" && inSection(i);
-          const paraBand = (focus === "paragraph" && inPara(i)) || (focus === "sentence" && [hit, hit2].some((h) => h && h.line === i && !h.exact));
+          const paraBand = focus === "paragraph" && inPara(i);
           const evidenceLine = focus === "sentence" && [hit, hit2].some((h) => h && h.line === i);
           if (isHead)
             return (
@@ -902,6 +950,7 @@ function ResearchExport({ style }) {
       <button className="ql-focus" style={b} onClick={exportCandidatesCSV}>Candidates (CSV)</button>
       <button className="ql-focus" style={b} onClick={() => exportLogJSON()}>Full log (JSON)</button>
       <button className="ql-focus" style={b} onClick={exportReadingCSV}>Focus reading (CSV)</button>
+      <button className="ql-focus" style={b} onClick={exportWrittenCSV}>Written answers (CSV)</button>
       <button className="ql-focus" style={b} onClick={() => setInspect(true)}>Inspect candidates</button>
       {inspect && <Inspector onClose={() => setInspect(false)} />}
     </div>
@@ -1493,7 +1542,7 @@ function HintLadder({ item, where, where2, steps, hintLevel, onHint, contextLine
   );
 }
 
-function Question({ item, slotNo, total, answer, onAnswer, onNext, onPrev, isLast, onWord, where, where2, steps, hintLevel, onHint, contextLine, onGraded, savedGrade, passage, flagMeta, onFlagSaved }) {
+function Question({ item, slotNo, total, answer, onAnswer, onNext, onPrev, isLast, onWord, onAskCoach, where, where2, steps, hintLevel, onHint, contextLine, onGraded, savedGrade, passage, flagMeta, onFlagSaved }) {
   const L = LEVELS[item.level - 1];
   const answered = !!answer;
 
@@ -1526,6 +1575,14 @@ function Question({ item, slotNo, total, answer, onAnswer, onNext, onPrev, isLas
       >
         <Words text={item.stem} onWord={onWord} />
       </h2>
+      {onAskCoach && (
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 items-center" style={{ fontFamily: F.ui, fontSize: 13 }}>
+          <button onClick={onAskCoach} className="ql-focus" style={{ color: C.teal, textDecoration: "underline", fontWeight: 600 }}>
+            {answered ? (answer.correct ? "Ask the coach about this question" : "Ask the coach why my answer is wrong") : "What is this question asking?"}
+          </button>
+          <span style={{ color: C.mute }}>Tap any word in the question or the options to see its meaning.</span>
+        </div>
+      )}
 
       {!answered && (
         <HintLadder item={item} where={where} where2={where2} steps={steps} hintLevel={hintLevel} onHint={onHint} contextLine={contextLine} onGraded={onGraded} savedGrade={savedGrade} />
@@ -1565,39 +1622,55 @@ function Question({ item, slotNo, total, answer, onAnswer, onNext, onPrev, isLas
           }
           return (
             <div key={i}>
-              <button
-                onClick={() => !answered && onAnswer(i)}
-                disabled={answered}
-                className="ql-opt ql-focus w-full text-left flex gap-3 items-start px-4 py-3"
+              <div
+                className="ql-opt w-full flex items-stretch"
                 style={{
                   background: bg,
                   border: `1px solid ${border}`,
                   borderRadius: 2,
-                  cursor: answered ? "default" : "pointer",
                   opacity: answered && !isRight && !chosen ? 0.6 : 1,
                 }}
               >
-                <span
-                  className="ql-bubble shrink-0 flex items-center justify-center"
+                {/* v10.4: only the letter chooses, so words in the option can be tapped for their meaning */}
+                <button
+                  onClick={() => !answered && onAnswer(i)}
+                  disabled={answered}
+                  aria-label={"Choose " + LETTERS[i]}
+                  className="ql-choose ql-focus shrink-0 flex flex-col items-center justify-center"
                   style={{
-                    width: 26,
-                    height: 26,
-                    borderRadius: 999,
-                    background: bubbleBg,
-                    border: `1.5px solid ${bubbleBorder}`,
-                    color: bubbleColor,
-                    fontFamily: F.mono,
-                    fontSize: 12,
-                    fontWeight: 700,
-                    marginTop: 1,
+                    width: 64,
+                    minHeight: 56,
+                    borderRight: `1px solid ${answered ? border : C.line}`,
+                    background: answered ? "transparent" : C.paper,
+                    cursor: answered ? "default" : "pointer",
                   }}
                 >
-                  {LETTERS[i]}
+                  <span
+                    className="ql-bubble flex items-center justify-center"
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 999,
+                      background: bubbleBg,
+                      border: `2px solid ${answered ? bubbleBorder : C.ink}`,
+                      color: answered ? bubbleColor : C.ink,
+                      fontFamily: F.mono,
+                      fontSize: 15,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {LETTERS[i]}
+                  </span>
+                  {!answered && (
+                    <span style={{ fontFamily: F.ui, fontSize: 10, color: C.slate, marginTop: 3, letterSpacing: "0.04em" }}>choose</span>
+                  )}
+                </button>
+                <span className="px-4 py-3 flex items-center" style={{ fontFamily: F.ui, fontSize: 15, lineHeight: 1.5, color: C.ink }}>
+                  <span>
+                    <Words text={o.text} onWord={onWord} />
+                  </span>
                 </span>
-                <span style={{ fontFamily: F.ui, fontSize: 15, lineHeight: 1.5, color: C.ink }}>
-                  {answered ? <Words text={o.text} onWord={onWord} /> : o.text}
-                </span>
-              </button>
+              </div>
               {answered && (
                 <p
                   className="mt-1 mb-2 pl-4"
@@ -1660,11 +1733,20 @@ function Question({ item, slotNo, total, answer, onAnswer, onNext, onPrev, isLas
 /* -------------------------- Open question ------------------------ */
 
 function OpenQuestion({ q, passage, onDone, structure, onUpdate, onFocus }) {
+  /* everything below is restored from q, so leaving and coming back
+     (or reviewing later) shows exactly what she wrote and what she got */
   const [text, setText] = useState(q.draft || "");
-  const [busy, setBusy] = useState(false);
-  const [mark, setMark] = useState(null);
+  const [mark, setMark] = useState(q.mark || null);
+  const [revision, setRevision] = useState(q.revision ?? q.draft ?? "");
+  const [improved, setImproved] = useState(q.improved || null);
+  const [revisedDone, setRevisedDone] = useState(!!q.revisedAt);
+  const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
-  const [showModel, setShowModel] = useState(false);
+
+  const save = (patch) => {
+    onUpdate(patch);
+    if (q.written_id) logWritten({ written_id: q.written_id, ...patch });
+  };
 
   const submit = async () => {
     if (text.trim().length < 40) {
@@ -1672,26 +1754,84 @@ function OpenQuestion({ q, passage, onDone, structure, onUpdate, onFocus }) {
       return;
     }
     setErr("");
-    setBusy(true);
+    /* her answer is saved before the marking call, so a failed call never loses it */
+    save({ draft: text, answer: text, submittedAt: new Date().toISOString() });
+    setBusy("mark");
     try {
-      const raw = await ask(buildMarkPrompt(passage, q.stem, q.criteria, text), {
-        maxTokens: 1200,
-        schema: MARK_SCHEMA,
-      });
-      setMark(parseJSON(raw));
+      const m = await markAnswer({ passage, stem: q.stem, criteria: q.criteria, answer: text });
+      setMark(m);
+      setRevision(text);
+      save({ mark: m, markedAt: new Date().toISOString() });
     } catch (e) {
-      setErr("Marking failed. Try again in a moment.");
+      setErr("Marking failed — your answer is saved. Try again in a moment.");
     }
-    setBusy(false);
+    setBusy("");
   };
+
+  const finishRevision = async (skipped) => {
+    const final = skipped ? text : revision;
+    if (!skipped && final.trim().length < 40) {
+      setErr("Write a bit more, or choose “Skip, show me”.");
+      return;
+    }
+    setErr("");
+    const at = new Date().toISOString();
+    save({ revision: skipped ? "" : final, revisionSkipped: !!skipped, revisedAt: at });
+    setRevisedDone(true);
+    setBusy("improve");
+    try {
+      const imp = await improveAnswer({ passage, stem: q.stem, criteria: q.criteria, answer: final, missing: mark?.missing });
+      if (!imp.segments.length) throw new Error("empty");
+      let strong = mark?.model || "";
+      if (!strong) strong = await strongAnswer({ passage, stem: q.stem, criteria: q.criteria });
+      const next = { ...imp, based_on: skipped ? "first" : "revision", strong };
+      setImproved(next);
+      save({ improved: next, improvedAt: new Date().toISOString() });
+    } catch (e) {
+      setErr("Couldn't build the improved answer. Your writing is saved — try again.");
+    }
+    setBusy("");
+  };
+
+  const box = (value, onChange, onBlur, disabled, placeholder) => (
+    <textarea
+      className="ql-focus mt-4"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={onBlur}
+      disabled={disabled}
+      placeholder={placeholder}
+      style={{
+        width: "100%",
+        minHeight: 160,
+        fontFamily: F.ui,
+        fontSize: 15,
+        lineHeight: 1.6,
+        color: C.ink,
+        background: disabled ? C.paper : C.card,
+        border: `1px solid ${C.line}`,
+        borderRadius: 2,
+        padding: "12px 14px",
+        resize: "vertical",
+      }}
+    />
+  );
+  const primary = (label, onClick, disabled) => (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="ql-focus mt-4 px-5 py-3"
+      style={{ background: disabled ? C.slate : C.ink, color: C.card, border: "none", borderRadius: 2, fontFamily: F.ui, fontSize: 14, fontWeight: 700 }}
+    >
+      {label}
+    </button>
+  );
+  const small = (t, color = C.slate) => <p style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color, letterSpacing: "0.04em" }}>{t}</p>;
 
   return (
     <div>
       <Eyebrow color={C.teal}>Evaluate and reflect · written</Eyebrow>
-      <h2
-        className="mt-4"
-        style={{ fontFamily: F.read, fontSize: 26, lineHeight: 1.3, color: C.ink, fontWeight: 600 }}
-      >
+      <h2 className="mt-4" style={{ fontFamily: F.read, fontSize: 26, lineHeight: 1.3, color: C.ink, fontWeight: 600 }}>
         {q.stem}
       </h2>
       {q.criteria && q.criteria.length > 0 && (
@@ -1723,27 +1863,8 @@ function OpenQuestion({ q, passage, onDone, structure, onUpdate, onFocus }) {
         />
       )}
 
-      <textarea
-        className="ql-focus mt-5"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={() => onUpdate({ draft: text })}
-        disabled={!!mark}
-        placeholder="Your answer. Point at the passage where you can."
-        style={{
-          width: "100%",
-          minHeight: 180,
-          fontFamily: F.ui,
-          fontSize: 15,
-          lineHeight: 1.6,
-          color: C.ink,
-          background: C.card,
-          border: `1px solid ${C.line}`,
-          borderRadius: 2,
-          padding: "12px 14px",
-          resize: "vertical",
-        }}
-      />
+      <div className="mt-5">{mark && small("YOUR FIRST ANSWER")}</div>
+      {box(text, setText, () => onUpdate({ draft: text }), !!mark, "Your answer. Point at the passage where you can.")}
 
       {err && (
         <p className="mt-3" style={{ fontFamily: F.ui, fontSize: 13, color: C.brick }}>
@@ -1751,105 +1872,122 @@ function OpenQuestion({ q, passage, onDone, structure, onUpdate, onFocus }) {
         </p>
       )}
 
-      {!mark && (
-        <button
-          onClick={submit}
-          disabled={busy}
-          className="ql-focus mt-4 px-5 py-3"
-          style={{
-            background: busy ? C.slate : C.ink,
-            color: C.card,
-            border: "none",
-            borderRadius: 2,
-            fontFamily: F.ui,
-            fontSize: 14,
-            fontWeight: 700,
-          }}
-        >
-          {busy ? "Reading your answer…" : "Get feedback"}
-        </button>
-      )}
+      {!mark && primary(busy === "mark" ? "Reading your answer…" : "Get feedback", submit, !!busy)}
 
       {mark && (
         <div className="mt-6 pt-5" style={{ borderTop: `1px solid ${C.line}` }}>
           <Eyebrow color={mark.verdict === "thin" ? C.brick : C.teal}>{mark.verdict}</Eyebrow>
           <div className="mt-3 grid sm:grid-cols-2 gap-5">
             <div>
-              <p style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color: C.teal }}>Working</p>
+              {small("Working", C.teal)}
               <ul className="mt-1 space-y-1">
                 {(mark.strengths || []).map((s, i) => (
-                  <li key={i} style={{ fontFamily: F.ui, fontSize: 14, color: C.ink, lineHeight: 1.5 }}>
-                    {s}
-                  </li>
+                  <li key={i} style={{ fontFamily: F.ui, fontSize: 14, color: C.ink, lineHeight: 1.5 }}>{s}</li>
                 ))}
               </ul>
             </div>
             <div>
-              <p style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color: C.brick }}>Missing</p>
+              {small("Missing", C.brick)}
               <ul className="mt-1 space-y-1">
                 {(mark.missing || []).map((s, i) => (
-                  <li key={i} style={{ fontFamily: F.ui, fontSize: 14, color: C.ink, lineHeight: 1.5 }}>
-                    {s}
-                  </li>
+                  <li key={i} style={{ fontFamily: F.ui, fontSize: 14, color: C.ink, lineHeight: 1.5 }}>{s}</li>
                 ))}
               </ul>
             </div>
           </div>
           {mark.nudge && (
-            <p
-              className="mt-5 px-4 py-3"
-              style={{
-                fontFamily: F.read,
-                fontSize: 17,
-                color: C.ink,
-                background: C.amberSoft,
-                borderRadius: 2,
-              }}
-            >
+            <p className="mt-5 px-4 py-3" style={{ fontFamily: F.read, fontSize: 17, color: C.ink, background: C.amberSoft, borderRadius: 2 }}>
               {mark.nudge}
             </p>
           )}
-          <div className="mt-4">
-            {showModel ? (
-              <p
-                className="px-4 py-3"
-                style={{
-                  fontFamily: F.read,
-                  fontSize: 16,
-                  lineHeight: 1.6,
-                  color: C.ink,
-                  border: `1px solid ${C.line}`,
-                  borderRadius: 2,
-                }}
-              >
-                {mark.model}
+
+          {/* one revision attempt, before any better version is shown */}
+          {!revisedDone ? (
+            <div className="mt-6">
+              {small("TRY ONCE MORE")}
+              <p className="mt-1" style={{ fontFamily: F.ui, fontSize: 13, color: C.slate, lineHeight: 1.5 }}>
+                Use the question above to improve your answer. Then you'll see your answer improved, and a strong answer to compare.
               </p>
-            ) : (
-              <button
-                onClick={() => setShowModel(true)}
-                className="ql-focus"
-                style={{ fontFamily: F.ui, fontSize: 13, color: C.slate, textDecoration: "underline" }}
-              >
-                Show a strong answer
-              </button>
-            )}
-          </div>
-          <button
-            onClick={onDone}
-            className="ql-focus mt-6 px-5 py-3"
-            style={{
-              background: C.ink,
-              color: C.card,
-              border: "none",
-              borderRadius: 2,
-              fontFamily: F.ui,
-              fontSize: 14,
-              fontWeight: 700,
-            }}
-          >
-            See how the climb went
-          </button>
+              {box(revision, setRevision, () => onUpdate({ revisionDraft: revision }), !!busy, "Edit your answer here.")}
+              <div className="flex flex-wrap items-center gap-4">
+                {primary("Submit my revision", () => finishRevision(false), !!busy)}
+                <button
+                  onClick={() => finishRevision(true)}
+                  disabled={!!busy}
+                  className="ql-focus mt-4"
+                  style={{ fontFamily: F.ui, fontSize: 13, color: C.slate, textDecoration: "underline" }}
+                >
+                  Skip, show me
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-6">
+              {q.revision && (
+                <>
+                  {small("YOUR REVISION")}
+                  <p className="mt-1 px-4 py-3" style={{ fontFamily: F.ui, fontSize: 15, lineHeight: 1.6, color: C.ink, background: C.paper, borderRadius: 2, whiteSpace: "pre-wrap" }}>
+                    {q.revision}
+                  </p>
+                </>
+              )}
+              {busy === "improve" && (
+                <p className="mt-4" style={{ fontFamily: F.ui, fontSize: 14, color: C.slate }}>Improving your answer…</p>
+              )}
+              {!improved && !busy && primary("Try again", () => finishRevision(!!q.revisionSkipped), false)}
+              {improved && <ImprovedAnswer improved={improved} />}
+            </div>
+          )}
+
+          {primary("See how the climb went", onDone, busy === "mark")}
         </div>
+      )}
+    </div>
+  );
+}
+
+/* her answer with the additions marked, then a strong answer to compare */
+function ImprovedAnswer({ improved }) {
+  const adds = (improved.segments || []).filter((s) => s.added);
+  return (
+    <div className="mt-5">
+      <p style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color: C.teal, letterSpacing: "0.04em" }}>
+        YOUR ANSWER, IMPROVED
+      </p>
+      <p className="mt-1" style={{ fontFamily: F.ui, fontSize: 12, color: C.slate }}>
+        Your words are kept. <span style={{ background: C.amberSoft, padding: "0 3px" }}>Highlighted</span> parts were added or changed
+        {improved.based_on === "revision" ? " (built from your revision)." : " (built from your first answer)."}
+      </p>
+      <p className="mt-2 px-4 py-3" style={{ fontFamily: F.read, fontSize: 17, lineHeight: 1.7, color: C.ink, border: `1px solid ${C.line}`, borderRadius: 2 }}>
+        {(improved.segments || []).map((s, i) =>
+          s.added ? (
+            <mark key={i} title={s.why} style={{ background: C.amberSoft, color: C.ink, padding: "0 2px" }}>
+              {s.text}
+              <sup style={{ fontFamily: F.ui, fontSize: 10, color: C.amber, fontWeight: 700 }}>{adds.indexOf(s) + 1}</sup>{" "}
+            </mark>
+          ) : (
+            <span key={i}>{s.text} </span>
+          )
+        )}
+      </p>
+      {adds.length > 0 && (
+        <ol className="mt-2 space-y-1">
+          {adds.map((s, i) => (
+            <li key={i} style={{ fontFamily: F.ui, fontSize: 13, color: C.slate, lineHeight: 1.5 }}>
+              <b style={{ color: C.amber }}>{i + 1}</b> {s.why || "added"}
+            </li>
+          ))}
+        </ol>
+      )}
+      {improved.strong && (
+        <>
+          <p className="mt-5" style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color: C.slate, letterSpacing: "0.04em" }}>
+            A STRONG ANSWER, FOR COMPARISON
+          </p>
+          <p className="mt-1 px-4 py-3" style={{ fontFamily: F.read, fontSize: 16, lineHeight: 1.6, color: C.ink, background: C.paper, borderRadius: 2 }}>
+            {improved.strong}
+          </p>
+        </>
       )}
     </div>
   );
@@ -1857,7 +1995,7 @@ function OpenQuestion({ q, passage, onDone, structure, onUpdate, onFocus }) {
 
 /* ----------------------------- Review ---------------------------- */
 
-function Review({ byLevel, answers, onRestart, onRetry, rejected = [], shortfalls = [] }) {
+function Review({ byLevel, answers, onRestart, onRetry, rejected = [], shortfalls = [], openQ = null, onOpenWritten }) {
   const rows = LEVELS.map((L) => {
     const items = byLevel[L.n] || [];
     let right = 0;
@@ -2005,8 +2143,56 @@ function Review({ byLevel, answers, onRestart, onRetry, rejected = [], shortfall
           New passage
         </button>
       </div>
+      {openQ && <WrittenReview q={openQ} onOpen={onOpenWritten} />}
       <ResearchExport style={{ marginTop: 28 }} />
       <FlagExport style={{ marginTop: 8 }} />
+    </div>
+  );
+}
+
+/* the written question on the review screen: everything that was saved */
+function WrittenReview({ q, onOpen }) {
+  const lab = (t) => (
+    <p className="mt-4" style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color: C.slate, letterSpacing: "0.04em" }}>
+      {t}
+    </p>
+  );
+  const body = (t) => (
+    <p className="mt-1" style={{ fontFamily: F.ui, fontSize: 15, lineHeight: 1.6, color: C.ink, whiteSpace: "pre-wrap" }}>
+      {t}
+    </p>
+  );
+  const answer = q.answer || q.draft || "";
+  return (
+    <div className="mt-8 pt-6" style={{ borderTop: `1px solid ${C.line}` }}>
+      <Eyebrow color={C.teal}>Written question</Eyebrow>
+      <p className="mt-3" style={{ fontFamily: F.read, fontSize: 19, lineHeight: 1.4, color: C.ink, fontWeight: 600 }}>
+        {q.stem}
+      </p>
+      {answer ? (
+        <>
+          {lab(q.mark ? "YOUR FIRST ANSWER · " + String(q.mark.verdict || "").toUpperCase() : "YOUR DRAFT (not submitted)")}
+          {body(answer)}
+        </>
+      ) : (
+        body("Not answered yet.")
+      )}
+      {q.revision && (
+        <>
+          {lab("YOUR REVISION")}
+          {body(q.revision)}
+        </>
+      )}
+      {q.improved && <ImprovedAnswer improved={q.improved} />}
+      {onOpen && !q.improved && (
+        <button
+          onClick={onOpen}
+          className="ql-focus mt-4"
+          style={{ fontFamily: F.ui, fontSize: 13, color: C.teal, textDecoration: "underline" }}
+        >
+          {answer ? "Continue the written question" : "Answer the written question"}
+        </button>
+      )}
     </div>
   );
 }
@@ -2110,6 +2296,7 @@ export default function App() {
   const [hintMap, setHintMap] = useState({});
   /* v10.4: question-coach use per question (counts as help) */
   const [coachMap, setCoachMap] = useState({});
+  const [lookupMap, setLookupMap] = useState({});
   const [openFocus, setOpenFocus] = useState({ where: null, focus: "none" });
   const rejectedRef = useRef([]);
   const runRef = useRef(null);
@@ -2155,6 +2342,8 @@ export default function App() {
     : earned.includes("section")
     ? "section"
     : "none";
+  /* the key-word hint is the last step: by then the location is given, so the word is marked in the text too */
+  const passageKeyword = !hasAnswered && earned.includes("keyword") ? item?.keyword || "" : "";
 
   const runGeneration = useCallback(async (source) => {
     const cfg = loadConfig();
@@ -2512,13 +2701,40 @@ export default function App() {
       shortfalls: shortfallsRef.current.map((x) => ({ process: x.intended_process, requested: x.requested, accepted: x.accepted })),
     });
 
+    /* written question + premise check: everything it names must exist in
+       the text in that role; one regeneration if not. Logged either way. */
     try {
-      const raw = await ask(buildOpenPrompt(source.prompt, source.passage), {
-        maxTokens: 900,
-        schema: OPEN_SCHEMA,
-        config: cfg,
-      });
-      setOpenQ(parseJSON(raw));
+      const writtenId = runId + "-w";
+      const premise = { attempts: [] };
+      let q = null;
+      let problems = [];
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const raw = await ask(buildOpenPrompt(source.prompt, source.passage, problems), {
+          maxTokens: 900,
+          schema: OPEN_SCHEMA,
+          config: cfg,
+        });
+        const d = parseJSON(raw);
+        if (!d?.stem) continue;
+        q = { stem: String(d.stem), criteria: Array.isArray(d.criteria) ? d.criteria.map(String) : [] };
+        let chk;
+        try {
+          chk = await checkPremise({ stem: q.stem, criteria: q.criteria, passage: source.passage });
+        } catch (e) {
+          chk = { ok: null, problems: [], error: String(e?.message || e).slice(0, 120) };
+        }
+        premise.attempts.push({ stem: q.stem, ...chk });
+        if (chk.ok !== false) break;
+        problems = chk.problems.length ? chk.problems : ["the question names something the text does not contain in that role"];
+      }
+      if (q) {
+        const last = premise.attempts[premise.attempts.length - 1] || {};
+        premise.ok = last.ok;
+        premise.regenerated = premise.attempts.length > 1;
+        const full = { ...q, written_id: writtenId, run_id: runId, written_version: WRITTEN_VERSION, premise };
+        logWritten({ written_id: writtenId, run_id: runId, written_version: WRITTEN_VERSION, stem: q.stem, criteria: q.criteria, premise, created_at: new Date().toISOString() });
+        setOpenQ(full);
+      } else setOpenQ(null);
     } catch (e) {
       setOpenQ(null);
     }
@@ -2656,7 +2872,10 @@ export default function App() {
     const next = slotsNow.findIndex((sl) => !(rec.answers || {})[sl.level + "-" + sl.i]);
     setSlotIdx(next === -1 ? 0 : next);
     saved.current = true;
-    setScreen("session");
+    /* all multiple-choice done: go back to the written question if it is
+       unfinished, otherwise to the review (which shows the saved writing) */
+    if (next === -1 && slotsNow.length) setScreen(rec.openQ && !rec.openQ.improved ? "open" : "review");
+    else setScreen("session");
   };
 
   const start = (source) => {
@@ -2713,6 +2932,8 @@ export default function App() {
         helped: hintLevel > 0 || (coachMap[qKey] || []).some((u) => !u.answered),
         locationShown: earned.some((k) => LOCATION_KINDS.includes(k)),
         wordGrade: wordGrades.current[qKey] || null,
+        /* word look-ups before answering (stem, options or passage); not counted as help */
+        lookups: (lookupMap[qKey] || []).filter((u) => !u.answered),
       },
     }));
   };
@@ -2773,6 +2994,8 @@ export default function App() {
           currentStem={item?.stem}
           item={screen === "session" && item ? item : null}
           answered={hasAnswered}
+          choice={hasAnswered ? answers[slot.level + "-" + slot.i]?.choice : null}
+          aboutQuestion={asking === "question"}
           learner={learnerText(loadConfig())}
           onUse={(u) => setCoachMap((m) => ({ ...m, [qKey]: [...(m[qKey] || []), u] }))}
           onClose={() => setAsking(false)}
@@ -2912,6 +3135,7 @@ export default function App() {
               >
                 {screen === "open" && openQ && (
                   <OpenQuestion
+                    key={openQ.written_id || openQ.stem}
                     q={openQ}
                     passage={src.passage}
                     structure={structure}
@@ -2932,7 +3156,16 @@ export default function App() {
                     onPrev={prev}
                     savedGrade={wordGrades.current[qKey]}
                     isLast={slotIdx + 1 === slots.length}
-                    onWord={(word, sentence) => setLookup({ word, sentence })}
+                    onWord={(word, sentence) => {
+                      setLookup({ word, sentence });
+                      /* where she looked a word up, for the research log */
+                      const where = sentence === item.stem ? "stem" : item.options.some((o) => o.text === sentence) ? "option" : "passage";
+                      setLookupMap((m) => ({ ...m, [qKey]: [...(m[qKey] || []), { word, where, answered: hasAnswered, at: new Date().toISOString() }] }));
+                    }}
+                    onAskCoach={() => {
+                      setSelection(item.stem);
+                      setAsking("question");
+                    }}
                     where={where}
                     where2={where2}
                     steps={steps}
@@ -3015,6 +3248,7 @@ export default function App() {
                       where={screen === "open" ? openFocus.where : where}
                       where2={screen === "open" ? null : item?.level === 3 ? where2 : null}
                       focus={screen === "open" ? openFocus.focus : passageFocus}
+                      keyword={screen === "open" ? "" : passageKeyword}
                       onWord={(word, sentence) => setLookup({ word, sentence })}
                       onSelect={setSelection}
                     />
@@ -3037,6 +3271,7 @@ export default function App() {
                   where={screen === "open" ? openFocus.where : where}
                   where2={screen === "open" ? null : item?.level === 3 ? where2 : null}
                   focus={screen === "open" ? openFocus.focus : passageFocus}
+                  keyword={screen === "open" ? "" : passageKeyword}
                   onWord={(word, sentence) => setLookup({ word, sentence })}
                   onSelect={setSelection}
                 />
@@ -3060,6 +3295,8 @@ export default function App() {
           onRetry={retryMissed}
           rejected={rejectedRef.current}
           shortfalls={shortfallsRef.current}
+          openQ={openQ}
+          onOpenWritten={() => setScreen("open")}
         />
       )}
     </div>

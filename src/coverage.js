@@ -289,3 +289,107 @@ export function placeKey(options, target, seed) {
   out.splice(target, 0, options[from]);
   return { options: out, from, to: target };
 }
+
+/* ------------------------------------------------------------------ *
+ * Evidence at sentence level (v10.4): after she answers, the panel marks
+ * the 1–3 sentences that hold the evidence — never a whole paragraph.
+ * Offsets are in the RAW line, so the marking lines up with the text.
+ * ------------------------------------------------------------------ */
+
+const ABBR = /(?:\b(?:e\.g|i\.e|etc|vs|cf|al|dr|mr|mrs|ms|prof|no|fig|approx|st|jr|sr)\.|\b[A-Za-z]\.)$/i;
+
+/** sentenceSpans(raw) → [{from, to}] raw-character ranges, one per sentence */
+export function sentenceSpans(raw) {
+  const s = String(raw);
+  const out = [];
+  let start = 0;
+  const re = /[.!?]+["'’”)\]]*(?=\s+|$)/g;
+  let m;
+  while ((m = re.exec(s))) {
+    const end = m.index + m[0].length;
+    const before = s.slice(start, end);
+    const next = s.slice(end).trimStart();
+    /* not a boundary: "e.g.", "Dr.", an initial, or the next word starts in lower case */
+    if (ABBR.test(before.replace(/["'’”)\]]+$/, "")) || (next && /^[a-z]/.test(next))) continue;
+    if (before.trim()) out.push({ from: start, to: end });
+    start = end;
+    while (start < s.length && /\s/.test(s[start])) start++;
+    re.lastIndex = start;
+  }
+  if (s.slice(start).trim()) out.push({ from: start, to: s.length });
+  return out;
+}
+
+/* normalised line plus a map from each normalised index back to the raw index */
+function normWithMap(raw) {
+  let t = "";
+  const map = [];
+  let inSpace = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (/\s/.test(ch)) {
+      if (inSpace) continue;
+      inSpace = true;
+      t += " ";
+    } else {
+      inSpace = false;
+      t += ch.replace(/[‘’]/g, "'").replace(/[“”]/g, '"').toLowerCase();
+    }
+    map.push(i);
+  }
+  map.push(raw.length);
+  return { t, map };
+}
+
+const EV_STOP = new Set("the a an of to in on for and or but is are was were be by with as at from that this these those it its into than then so if not no can may must will would should could have has had do does they their them there which who what".split(" "));
+const evWords = (t) => (normLine(t).match(/[a-z0-9][a-z0-9'-]*/g) || []).filter((w) => w.length > 2 && !EV_STOP.has(w));
+
+/**
+ * evidenceSpans(raw, hits) → [{from, to}] the sentences holding the evidence.
+ * hits: [{exact, needle, pieces?}] from findAnchor (needle is normalised).
+ *  exact  → every sentence the quoted span touches
+ *  fuzzy  → the run of 1–3 sentences that covers most of the evidence words
+ */
+export function evidenceSpans(raw, hits) {
+  const sents = sentenceSpans(raw);
+  if (!sents.length) return [];
+  const { t, map } = normWithMap(String(raw));
+  const pick = new Set();
+  for (const h of hits || []) {
+    if (!h) continue;
+    let done = false;
+    if (h.exact) {
+      const parts = h.pieces && h.pieces.length ? h.pieces : [h.needle];
+      let from = 0;
+      let s0 = -1;
+      let e0 = -1;
+      for (const pc of parts) {
+        const k = t.indexOf(pc, from);
+        if (k === -1) { s0 = -1; break; }
+        if (s0 === -1) s0 = k;
+        e0 = k + pc.length;
+        from = e0;
+      }
+      if (s0 > -1) {
+        const rs = map[s0];
+        const re = map[Math.max(s0, e0 - 1)] + 1;
+        sents.forEach((sp, i) => { if (sp.from < re && sp.to > rs) pick.add(i); });
+        done = true;
+      }
+    }
+    if (!done) {
+      const want = [...new Set(evWords(h.needle))];
+      if (!want.length) continue;
+      const sw = sents.map((sp) => new Set(evWords(raw.slice(sp.from, sp.to))));
+      let best = { score: -1, i: 0, n: 1 };
+      for (let n = 1; n <= 3; n++)
+        for (let i = 0; i + n <= sents.length; i++) {
+          const got = want.filter((w) => sw.slice(i, i + n).some((set) => set.has(w))).length / want.length;
+          /* a longer run must add real coverage to win */
+          if (got > best.score + (n > best.n ? 0.15 : 0)) best = { score: got, i, n };
+        }
+      for (let k = best.i; k < best.i + best.n; k++) pick.add(k);
+    }
+  }
+  return [...pick].sort((a, b) => a - b).map((i) => sents[i]);
+}

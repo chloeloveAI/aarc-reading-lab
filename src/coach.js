@@ -15,7 +15,7 @@
 
 import { complete, parseJSON } from "./llm.js";
 
-export const COACH_VERSION = "coach-v1";
+export const COACH_VERSION = "coach-v2";
 
 export const COACH_SCHEMA = {
   type: "object",
@@ -59,7 +59,7 @@ export function coachLeak(reply, item) {
   return "";
 }
 
-function buildCoachPrompt({ selection, question, passage, item, answered, learner, history = [], strict = false }) {
+function buildCoachPrompt({ selection, question, passage, item, answered, choice = null, aboutQuestion = false, learner, history = [], strict = false }) {
   const opts = (item?.options || []).map((o, i) => `${"ABCD"[i]}. ${o.text}${o.correct ? "   <-- correct" : ""}`).join("\n");
   const turns = history.map((t) => `READER: ${t.question}\nCOACH: ${t.answer}`).join("\n");
   const before = `You are a reading coach. A reader is answering a multiple-choice question about a text and has asked you about a part of it.
@@ -73,7 +73,7 @@ THE QUESTION SHE IS WORKING ON:
 ${item?.stem || "(none)"}
 ${opts}
 
-THE PART SHE SELECTED: "${selection}"
+${aboutQuestion ? "SHE IS ASKING ABOUT THE QUESTION ITSELF (its wording), not about a part of the text." : `THE PART SHE SELECTED: "${selection}"`}
 ${turns ? `\nEARLIER IN THIS CHAT:\n${turns}\n` : ""}
 HER MESSAGE: ${question}
 `;
@@ -81,15 +81,20 @@ HER MESSAGE: ${question}
     return (
       before +
       `
-She has ALREADY answered this question, so you may now explain fully: what the selected part means, how it connects to the rest of the text, and why the correct option is right.
-Rules: at most 110 words in "reply", plain language, talk to her as "you". "kind": "explain". "followups": 2 short questions (at most 9 words) she might ask next.
+She has ALREADY answered this question, so you may now explain fully.
+${chosenLine(item, choice)}
+- If she chose a WRONG option: first explain why HER option (name its letter) does not fit what the text says, then why the correct option does. Never tell her she chose the correct answer.
+- If she chose the correct option: confirm it and explain why, and why the most tempting wrong option fails.
+- Use the text as evidence; you may quote a few words of it.
+Rules: at most 130 words in "reply", plain language, talk to her as "you". "kind": "explain". "followups": 2 short questions (at most 9 words) she might ask next.
 Return ONLY JSON: {"kind":"explain","reply":"...","followups":["...","..."]}`
     );
   return (
     before +
     `
 She has NOT answered yet. Your job is to keep the thinking with her.
-- If she asks something FACTUAL or about a WORD (who someone is, what a word or phrase means, what a number refers to), answer it directly and briefly, and correct any misreading. "kind": "fact".
+- If she asks something FACTUAL or about a WORD (who someone is, what a word or phrase means, what a number refers to), answer it directly and briefly, and correct any misreading. A word may come from the question or an option: explain its meaning, but never say whether that option is right. "kind": "fact".
+- If she asks WHAT THE QUESTION IS ASKING: say it again in simpler words and name the kind of answer it wants (a reason, a cause, a purpose, a feeling, a judgment…). Do not hint at the answer or at where it is. "kind": "clarify".
 - If she asks for an INTERPRETATION (why, what it shows, what it suggests, how parts connect, which option is right), do NOT interpret and do NOT explain the idea. Instead ask her ONE short question that helps her think it through herself. "kind": "guide".
 - Never say, hint at or rule out any option. Never use the words of the correct option.
 - Never say where to look: no section or paragraph numbers, no "the next paragraph", no "the sentence that starts with". She must find and read the text herself.
@@ -101,12 +106,24 @@ Return ONLY JSON: {"kind":"fact","reply":"...","followups":["...","..."]}`
   );
 }
 
+const LET = "ABCDEF";
+function chosenLine(item, choice) {
+  const opts = item?.options || [];
+  if (choice == null || !opts[choice]) return "(Her choice is not known.)";
+  const key = opts.findIndex((o) => o.correct);
+  return opts[choice].correct
+    ? `SHE CHOSE ${LET[choice]} — the CORRECT option.`
+    : `SHE CHOSE ${LET[choice]} ("${opts[choice].text}") — WRONG. The correct option is ${LET[key]}.`;
+}
+
 const NUDGE =
   "I can't help with that part without giving the answer away. Read the text around your selection again and ask yourself: what is the writer doing here, and how does it connect to the question?";
 
-export async function coachTurn({ selection, question, passage, item, answered, learner, history }) {
+export { buildCoachPrompt };
+
+export async function coachTurn({ selection, question, passage, item, answered, choice, aboutQuestion, learner, history }) {
   const ask = async (strict) => {
-    const raw = await complete(buildCoachPrompt({ selection, question, passage, item, answered, learner, history, strict }), {
+    const raw = await complete(buildCoachPrompt({ selection, question, passage, item, answered, choice, aboutQuestion, learner, history, strict }), {
       maxTokens: 600,
       schema: COACH_SCHEMA,
       mode: "schema",

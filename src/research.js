@@ -46,7 +46,7 @@ export function newRunId() {
 }
 
 function empty() {
-  return { schema: "aarc-research-log/1", passages: {}, runs: [], calls: [], candidates: [], shortfalls: [], diagnostics: [], annotations: [], reading_sessions: [] };
+  return { schema: "aarc-research-log/1", passages: {}, runs: [], calls: [], candidates: [], shortfalls: [], diagnostics: [], annotations: [], reading_sessions: [], written_answers: [] };
 }
 
 export function loadLog() {
@@ -113,6 +113,17 @@ export function logReading(r) {
   append((log) => {
     log.reading_sessions = log.reading_sessions || [];
     log.reading_sessions.push(r);
+  });
+}
+
+/* the written question: one record per run, updated as she goes
+   (question + premise check → first answer + mark → revision → improved) */
+export function logWritten(rec) {
+  append((log) => {
+    log.written_answers = log.written_answers || [];
+    const i = log.written_answers.findIndex((w) => w.written_id === rec.written_id);
+    if (i === -1) log.written_answers.push(rec);
+    else log.written_answers[i] = { ...log.written_answers[i], ...rec };
   });
 }
 
@@ -334,6 +345,41 @@ export function exportCallsCSV() {
 
 /* one row per focus-reading event: session summary, word look-up,
    highlight, tutor turn — in time order within each session */
+/* one row per written answer: question, premise check, both drafts, mark, improved */
+export function exportWrittenCSV() {
+  const log = loadLog();
+  const runs = log.runs || [];
+  const cols = ["written_id", "run_id", "passage_id", "written_version", "stem", "premise_ok", "premise_regenerated", "premise_problems", "answer", "submitted_at", "verdict", "strengths", "missing", "nudge", "revision", "revision_skipped", "revised_at", "improved_verdict", "improved_text", "added_parts", "added_reasons", "kept_share", "strong_answer"];
+  const rows = [cols.join(",")];
+  for (const w of log.written_answers || []) {
+    const run = runs.find((r) => r.run_id === w.run_id);
+    const segs = w.improved?.segments || [];
+    const adds = segs.filter((s) => s.added);
+    const row = {
+      ...w,
+      passage_id: run?.passage_id || "",
+      premise_ok: w.premise?.ok,
+      premise_regenerated: w.premise?.regenerated ? "yes" : "no",
+      premise_problems: (w.premise?.attempts || []).flatMap((a) => a.problems || []).join(" | "),
+      submitted_at: w.submittedAt,
+      verdict: w.mark?.verdict,
+      strengths: (w.mark?.strengths || []).join(" | "),
+      missing: (w.mark?.missing || []).join(" | "),
+      nudge: w.mark?.nudge,
+      revision_skipped: w.revisionSkipped ? "yes" : w.revisedAt ? "no" : "",
+      revised_at: w.revisedAt,
+      improved_verdict: w.improved?.verdict,
+      improved_text: segs.map((s) => s.text).join(" "),
+      added_parts: adds.map((s) => s.text).join(" | "),
+      added_reasons: adds.map((s) => s.why).join(" | "),
+      kept_share: w.improved?.kept_share,
+      strong_answer: w.improved?.strong || w.mark?.model,
+    };
+    rows.push(cols.map((k) => csvCell(row[k])).join(","));
+  }
+  download(`aarc-written-${stamp()}.csv`, "\ufeff" + rows.join("\r\n"), "text/csv");
+}
+
 export function exportReadingCSV() {
   const log = loadLog();
   const runs = log.runs || [];
