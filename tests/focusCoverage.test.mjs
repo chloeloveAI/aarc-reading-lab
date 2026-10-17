@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { lineQuarters, quarterStarts, passageWithQuarters, buildBlueprint, blueprintSummary, rankFocus, maxTargeted, stemLocationProblem, keyPlan, placeKey } from "../src/coverage.js";
 import { textUpTo, buildTutorPrompt } from "../src/tutor.js";
 import { buildItemPromptV10 } from "../src/prompts.js";
+import { coachLeak } from "../src/coach.js";
 
 const here = new URL(".", import.meta.url);
 const md = readFileSync(new URL("../research/test_passage_free_buses.md", here), "utf8");
@@ -158,6 +159,16 @@ test("K1", "Answer key: every block of four candidates uses A, B, C and D once; 
   }
   assert.equal(seen.size, 4);
   return "plan " + plan.map((i) => "ABCD"[i]).join("");
+});
+
+test("Q1", "Question coach: replies that point to a place or repeat the key are caught", () => {
+  const item = { options: [{ text: "Removing fares attracted people who previously drove or stayed home", correct: true }, { text: "x" }, { text: "y" }, { text: "z" }] };
+  assert.match(coachLeak("Read the next paragraph carefully.", item), /place/);
+  assert.match(coachLeak("Look at paragraph 2 of Section 5.", item), /place/);
+  assert.match(coachLeak("Find the sentence that starts with 'We understand'.", item), /place/);
+  assert.match(coachLeak("It shows removing fares attracted people who previously drove or stayed at home.", item), /correct option/);
+  assert.equal(coachLeak("'Councillors' are members of the city council. Are they part of the Alliance?", item), "");
+  assert.equal(coachLeak("What do you think the writer wants you to notice about the councillors' argument?", item), "");
 });
 
 const passed = results.filter((r) => r.pass).length;
