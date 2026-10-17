@@ -14,9 +14,9 @@
  * Stored in this browser (localStorage "ql:research:v1"); export often.
  * ------------------------------------------------------------------ */
 
-export const PROMPT_VERSION = "items-v10.2";
-export const VALIDATOR_VERSION = "validator-v10.1";
-export const APP_VERSION = "aarc-reading-lab-v10.3";
+export const PROMPT_VERSION = "items-v10.3";
+export const VALIDATOR_VERSION = "validator-v10.2";
+export const APP_VERSION = "aarc-reading-lab-v10.4";
 
 const KEY = "ql:research:v1";
 
@@ -46,7 +46,7 @@ export function newRunId() {
 }
 
 function empty() {
-  return { schema: "aarc-research-log/1", passages: {}, runs: [], calls: [], candidates: [], shortfalls: [], diagnostics: [], annotations: [] };
+  return { schema: "aarc-research-log/1", passages: {}, runs: [], calls: [], candidates: [], shortfalls: [], diagnostics: [], annotations: [], reading_sessions: [] };
 }
 
 export function loadLog() {
@@ -108,6 +108,14 @@ export function logRunModel(runId, model) {
   });
 }
 
+/* one focus-reading session: timer, look-ups, highlights, tutor dialogue */
+export function logReading(r) {
+  append((log) => {
+    log.reading_sessions = log.reading_sessions || [];
+    log.reading_sessions.push(r);
+  });
+}
+
 export function logCall(call) {
   append((log) => log.calls.push(call));
 }
@@ -148,7 +156,9 @@ export function logAnnotation(a) {
 /* rule-based checks, grouped so structural and surface rules are not
    confused with any judgement of meaning */
 export const STRUCTURAL_CHECKS = ["four_options", "single_key", "distinct_options", "stem_complete", "anchor_found", "anchor2_found", "anchor2_distinct", "cross_paragraph"];
-export const SURFACE_CONTENT_CHECKS = ["not_copied", "not_combo_grid", "not_duplicate"];
+export const SURFACE_CONTENT_CHECKS = ["not_copied", "not_combo_grid", "not_duplicate", "distinct_evidence"];
+/* coverage (v10.4): evidence from the planned quarter; targeted items use the reader's focus */
+export const COVERAGE_CHECKS = ["in_target_quarter", "focus_addressed"];
 
 export function logSummary() {
   const log = loadLog();
@@ -184,7 +194,7 @@ export function exportLogJSON(extra = {}) {
 }
 
 /* one row per candidate — accepted and rejected — with its run's settings */
-const CHECKS = ["four_options", "single_key", "distinct_options", "stem_complete", "anchor_found", "not_copied", "anchor2_found", "anchor2_distinct", "cross_paragraph", "not_combo_grid", "not_duplicate"];
+const CHECKS = ["four_options", "single_key", "distinct_options", "stem_complete", "anchor_found", "not_copied", "anchor2_found", "anchor2_distinct", "cross_paragraph", "not_combo_grid", "not_duplicate", "distinct_evidence", "in_target_quarter", "focus_addressed"];
 
 export function exportCandidatesCSV() {
   const log = loadLog();
@@ -212,12 +222,19 @@ export function exportCandidatesCSV() {
     /* rule-based decision only; says nothing about meaning */
     ["failed_structural_checks", (c) => failed(c, STRUCTURAL_CHECKS)],
     ["failed_surface_content_checks", (c) => failed(c, SURFACE_CONTENT_CHECKS)],
+    ["failed_coverage_checks", (c) => failed(c, COVERAGE_CHECKS)],
     /* developer annotations (never shown to blind raters) */
     ["researcher_tags", (c) => [...new Set((ann[c.candidate_id] || []).map((a) => a.tag))].join(" ")],
     ["researcher_notes", (c) => (ann[c.candidate_id] || []).map((a) => a.note).filter(Boolean).join(" | ")],
     ["reasons", (c) => (c.reasons || []).join(" | ")],
     ...CHECKS.map((k) => ["check_" + k, (c) => (c.checks?.[k] == null ? "n/a" : c.checks[k] ? "pass" : "fail")]),
     ["anchor_match", (c) => c.anchor_match || ""],
+    ["slot_id", (c) => c.slot_id || ""],
+    ["target_quarter", (c) => c.target_quarter ?? ""],
+    ["anchor_quarter", (c) => c.anchor_quarter ?? ""],
+    ["target_focus_kind", (c) => c.target_focus?.kind || ""],
+    ["target_focus_text", (c) => c.target_focus?.text || ""],
+    ["reading_id", (c) => runs[c.run_id]?.reading_id || ""],
     ["skill", (c) => c.item?.skill],
     ["stem", (c) => c.item?.stem ?? c.raw?.stem],
     ["option_A", (c) => c.item?.options?.[0]?.text],
@@ -312,6 +329,27 @@ export function exportCallsCSV() {
   ];
   const rows = [cols.map((c) => c[0]).join(",")].concat(log.calls.map((c) => cols.map(([, g]) => csvCell(g(c))).join(",")));
   download(`aarc-calls-${stamp()}.csv`, "\ufeff" + rows.join("\r\n"), "text/csv");
+}
+
+/* one row per focus-reading event: session summary, word look-up,
+   highlight, tutor turn — in time order within each session */
+export function exportReadingCSV() {
+  const log = loadLog();
+  const runs = log.runs || [];
+  const cols = ["reading_id", "run_id", "passage_id", "event", "at", "quarter", "line", "text", "saved_to_vocab", "role", "highlight_id", "reading_active_ms", "reading_total_ms", "progress_highlight_pct", "progress_scroll_pct", "tutor_version"];
+  const rows = [cols.join(",")];
+  for (const r of log.reading_sessions || []) {
+    const run = runs.find((x) => x.reading_id === r.reading_id);
+    const base = { reading_id: r.reading_id, run_id: run?.run_id || "", passage_id: r.passage_id || "", tutor_version: r.tutor_version || "" };
+    const ev = [];
+    ev.push({ ...base, event: "session", at: r.started_at, reading_active_ms: r.active_ms, reading_total_ms: r.total_ms, progress_highlight_pct: r.progress_highlight_pct, progress_scroll_pct: r.progress_scroll_pct });
+    (r.lookups || []).forEach((l) => ev.push({ ...base, event: "word_lookup", at: l.at, quarter: l.quarter, line: l.line, text: l.word, saved_to_vocab: l.saved ? "yes" : "no" }));
+    (r.highlights || []).forEach((h) => ev.push({ ...base, event: "highlight", at: h.at, quarter: h.quarter, line: h.start_line, text: h.text, highlight_id: h.id }));
+    (r.tutor || []).forEach((t) => (t.turns || []).forEach((u) => ev.push({ ...base, event: "tutor_turn", at: u.at, role: u.role, text: u.text, highlight_id: t.highlight_id })));
+    ev.sort((x, y) => String(x.at).localeCompare(String(y.at)));
+    ev.forEach((e) => rows.push(cols.map((k) => csvCell(e[k])).join(",")));
+  }
+  download(`aarc-reading-${stamp()}.csv`, "\ufeff" + rows.join("\r\n"), "text/csv");
 }
 
 /* ------------------------- exemplar library ------------------------ *

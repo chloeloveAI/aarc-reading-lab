@@ -35,7 +35,11 @@ import {
   logSummary,
   exportLogJSON,
   exportCandidatesCSV,
+  exportReadingCSV,
+  logReading,
 } from "./research";
+import FocusReading from "./FocusReading";
+import { lineQuarters, passageWithQuarters, buildBlueprint, blueprintSummary, COVERAGE_VERSION } from "./coverage";
 import { loadFlags, exportFlagsCSV, exportFlagsJSON, agreement } from "./flags";
 import {
   complete,
@@ -335,6 +339,20 @@ function findAnchor(lines, anchor) {
     const idx = norm(lines[i]).indexOf(a);
     if (idx > -1) return { line: i, exact: true, needle: a };
   }
+  /* v10.4: a span shortened with "..." or "…" — every piece, in order, in one line */
+  const pieces = a.split(/\s*(?:\.\.\.|\u2026)\s*/).map((x) => x.trim()).filter((x) => x.length >= 3);
+  if (pieces.length > 1)
+    for (let i = 0; i < lines.length; i++) {
+      const nl = norm(lines[i]);
+      let from = 0;
+      const ok = pieces.every((pc) => {
+        const k = nl.indexOf(pc, from);
+        if (k === -1) return false;
+        from = k + pc.length;
+        return true;
+      });
+      if (ok) return { line: i, exact: true, needle: pieces[0], ellipsis: true };
+    }
   const words = a.split(" ").filter((w) => w.length > 4);
   if (words.length < 2) return null;
   let best = { line: -1, score: 0 };
@@ -836,6 +854,7 @@ function ResearchExport({ style }) {
       </span>
       <button className="ql-focus" style={b} onClick={exportCandidatesCSV}>Candidates (CSV)</button>
       <button className="ql-focus" style={b} onClick={() => exportLogJSON()}>Full log (JSON)</button>
+      <button className="ql-focus" style={b} onClick={exportReadingCSV}>Focus reading (CSV)</button>
       <button className="ql-focus" style={b} onClick={() => setInspect(true)}>Inspect candidates</button>
       {inspect && <Inspector onClose={() => setInspect(false)} />}
     </div>
@@ -948,6 +967,13 @@ function Setup({ onStart, onResume }) {
   const [past, setPast] = useState([]);
   const [where, setWhere] = useState("");
   const [meta, setMeta] = useState({ title: "", source: "", licence: "" });
+  const [focusFirst, setFocusFirst] = useState(() => {
+    try {
+      return localStorage.getItem("ql:focusFirst") !== "off";
+    } catch (e) {
+      return true;
+    }
+  });
 
   useEffect(() => {
     listSessions()
@@ -977,7 +1003,7 @@ function Setup({ onStart, onResume }) {
       return;
     }
     setErr("");
-    onStart({ prompt: p.trim(), passage: a.trim(), plan: PLANS[planKey], meta: { ...meta } });
+    onStart({ prompt: p.trim(), passage: a.trim(), plan: PLANS[planKey], meta: { ...meta }, focusFirst });
   };
 
   const box = {
@@ -1115,7 +1141,34 @@ function Setup({ onStart, onResume }) {
         </p>
       )}
 
-      <div className="mt-7 flex flex-wrap items-center gap-3">
+      <label
+        htmlFor="focus-first"
+        className="mt-7 flex items-start gap-3 px-3 py-3"
+        style={{ background: focusFirst ? C.tealSoft : "transparent", border: `1px solid ${focusFirst ? C.teal : C.line}`, borderRadius: 2, cursor: "pointer" }}
+      >
+        <input
+          id="focus-first"
+          type="checkbox"
+          checked={focusFirst}
+          onChange={(e) => {
+            setFocusFirst(e.target.checked);
+            try {
+              localStorage.setItem("ql:focusFirst", e.target.checked ? "on" : "off");
+            } catch (err) {
+              /* ignore */
+            }
+          }}
+          style={{ marginTop: 3 }}
+        />
+        <span>
+          <span style={{ fontFamily: F.ui, fontSize: 14, fontWeight: 700, color: C.ink }}>Start with focus reading</span>
+          <span className="block mt-0.5" style={{ fontFamily: F.ui, fontSize: 12, color: C.slate, lineHeight: 1.5 }}>
+            The reader first reads the passage alone, with a timer, word meanings and a tutor for highlighted parts. The questions are written when she finishes, spread across the whole text, and some are built around what she asked about.
+          </span>
+        </span>
+      </label>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
         {Object.values(PLANS).map((p) => (
           <button
             key={p.key}
@@ -2065,6 +2118,12 @@ export default function App() {
         logRunModel(runId, m);
       }
     };
+    /* v10.4 coverage: quarters of the text, and a plan for every question slot */
+    const qOf = lineQuarters(st.lines);
+    const markedPassage = passageWithQuarters(st.lines);
+    const blueprint = buildBlueprint(source.plan.counts, source.reading?.focus || []);
+    const filledSlots = new Set();
+    const usedAnchors = [];
     const pmeta = source.meta || {};
     logPassage(pid, source.passage, {
       title: pmeta.title || (source.passage || "").slice(0, 70).replace(/\s+/g, " "),
@@ -2082,6 +2141,10 @@ export default function App() {
       validator_version: VALIDATOR_VERSION,
       settings,
       passage_meta: { title: pmeta.title || "", source: pmeta.source || "", licence: pmeta.licence || "" },
+      reading_id: source.reading?.reading_id || "",
+      coverage_version: COVERAGE_VERSION,
+      coverage_plan: blueprint,
+      coverage_summary: blueprintSummary(blueprint),
       started_at: new Date().toISOString(),
     });
     let nCalls = 0;
@@ -2118,6 +2181,10 @@ export default function App() {
 
       while (collected.length < need && callsThisLevel < MAX_CALLS) {
         const want = Math.min(chunk, need - collected.length);
+        /* v10.4: the planned slots this request should fill (quarter + reader focus) */
+        const batch = blueprint.filter((sl) => sl.level === L.n && !filledSlots.has(sl.slot_id)).slice(0, want);
+        /* after two rounds of misses, take good evidence from any quarter rather than lose the item */
+        const relaxQuarter = callsThisLevel >= need * 2;
         let got = [];
         /* schema-constrained first; step down if this build or model can't do it */
         /* output budget per item, measured to fit a full item with all
@@ -2146,7 +2213,7 @@ export default function App() {
           const feedback = lastReasons.length
             ? "\n\nYour previous items were rejected for these reasons — avoid them: " + [...new Set(lastReasons)].join("; ") + "."
             : "";
-          const args = { level: L.n, count: want, passage: source.passage, usedStems: used.slice(-6), cfg, exemplars: ex };
+          const args = { level: L.n, count: want, passage: source.passage, usedStems: used, cfg, exemplars: ex, markedPassage, slots: batch, usedAnchors };
           const promptText = buildItemPromptV10(args) + pass.extra + feedback;
           const callId = runId + "-C" + String(++nCalls).padStart(3, "0");
           callsThisLevel++;
@@ -2156,6 +2223,8 @@ export default function App() {
             passage_id: pid,
             intended_process: L.n,
             items_requested: want,
+            slot_ids: batch.map((sl) => sl.slot_id),
+            target_quarters: batch.map((sl) => sl.quarter),
             pass_mode: pass.mode,
             max_tokens: pass.tokens,
             prompt_version: PROMPT_VERSION,
@@ -2182,7 +2251,7 @@ export default function App() {
             logCall({ ...call, ok: true, latency_ms: lastExchange.ms, meta: lastExchange.meta, raw_reply: raw, shortfall_reason: parsed?.shortfall_reason || "" });
           } catch (e) {
             noteCloudModel();
-            logCall({ ...call, ok: false, error: e.message, error_kind: /^Output truncated/.test(e.message) ? "output_truncated" : /^Thinking exhaustion|only reasoning/.test(e.message) ? "thinking_exhaustion" : "call_or_parse_error", latency_ms: lastExchange.ms, meta: lastExchange.meta, raw_reply: raw || String(lastExchange.raw || ""), thinking_reply: lastExchange.thinking || "" });
+            logCall({ ...call, ok: false, error: e.message, error_kind: /^Output truncated/.test(e.message) ? "output_truncated" : /^Thinking exhaustion|only reasoning/.test(e.message) ? "thinking_exhaustion" : /^Empty reply/.test(e.message) ? "empty_reply" : /^Provider filtered/.test(e.message) ? "provider_filtered" : "call_or_parse_error", latency_ms: lastExchange.ms, meta: lastExchange.meta, raw_reply: raw || String(lastExchange.raw || ""), thinking_reply: lastExchange.thinking || "" });
             diag = { kind: "call_failed", call_id: callId, stage: pass.mode, error: e.message, raw: String(raw || lastExchange.raw || ""), thinking: lastExchange.thinking || "", meta: lastExchange.meta };
             if (/died|No response|reachable/i.test(e.message)) await new Promise((r) => setTimeout(r, 4000));
             continue;
@@ -2202,10 +2271,59 @@ export default function App() {
               if (!res.checks.not_duplicate) res.reasons.push("Duplicate of an earlier item in this run");
               else seenStems.add(key);
             }
+            /* v10.4 coverage: distinct evidence, planned quarter, reader focus */
+            let slotMatch = null;
+            let aQuarter = null;
+            if (rec.item && res.anchor_loc) {
+              const aLine = res.anchor_loc.line;
+              const bLine = res.anchor2_loc?.line;
+              aQuarter = qOf[aLine];
+              const ev = contentWords(rec.item.anchor);
+              const reused =
+                ev.length >= 3 &&
+                usedAnchors.some((u) => {
+                  const uw = new Set(contentWords(u));
+                  return ev.filter((w) => uw.has(w)).length / ev.length >= 0.6;
+                });
+              res.checks.distinct_evidence = !reused;
+              if (reused) res.reasons.push("Uses the same evidence as an earlier question");
+              const addressed = (sl) => {
+                const f = sl.focus;
+                if (!f) return true;
+                if (f.kind === "vocab") {
+                  const w = norm(f.text);
+                  return [rec.item.keyword, rec.item.stem, rec.item.anchor].some((t) => norm(t || "").includes(w));
+                }
+                const inRange = (ln) => ln != null && f.start_line != null && ln >= f.start_line && ln <= f.end_line;
+                if (inRange(aLine) || inRange(bLine)) return true;
+                const fw = new Set(contentWords(f.text));
+                return ev.length > 0 && ev.filter((w) => fw.has(w)).length / ev.length >= 0.5;
+              };
+              const open = batch.filter((sl) => !filledSlots.has(sl.slot_id));
+              slotMatch =
+                open.find((sl) => sl.focus && sl.quarter === aQuarter && addressed(sl)) ||
+                open.find((sl) => !sl.focus && sl.quarter === aQuarter) ||
+                (relaxQuarter ? open.find((sl) => sl.focus && addressed(sl)) || open.find((sl) => !sl.focus) : null);
+              res.checks.in_target_quarter = slotMatch ? slotMatch.quarter === aQuarter : false;
+              res.checks.focus_addressed = slotMatch?.focus ? addressed(slotMatch) : null;
+              if (!slotMatch) {
+                const focusOnly = open.some((sl) => sl.focus && sl.quarter === aQuarter);
+                res.reasons.push(
+                  focusOnly
+                    ? "Not built around the part the reader asked about"
+                    : "Evidence is from quarter " + aQuarter + ", not the planned quarter " + [...new Set(open.map((sl) => sl.quarter))].join(" or ")
+                );
+              } else if (!res.checks.in_target_quarter) rec.repairs.push("quarter relaxed after " + callsThisLevel + " requests");
+            }
             const allReasons = [...rec.reasons, ...res.reasons];
             const accepted = !!rec.item && allReasons.length === 0;
             reasons.push(...allReasons);
-            if (accepted && collected.length + got.length < need) got.push({ ...rec.item, candidateId, runId, passageId: pid });
+            if (accepted && collected.length + got.length < need) {
+              got.push({ ...rec.item, candidateId, runId, passageId: pid, slotId: slotMatch?.slot_id || "", quarter: aQuarter, focusKind: slotMatch?.focus?.kind || "" });
+              if (slotMatch) filledSlots.add(slotMatch.slot_id);
+              usedAnchors.push(rec.item.anchor);
+              if (rec.item.anchor2) usedAnchors.push(rec.item.anchor2);
+            }
             const tooMany = accepted && !got.some((g) => g.candidateId === candidateId);
             if (!accepted) rejectedRef.current.push({ level: L.n, stem: rec.item?.stem || String(rec.raw?.stem || ""), reason: allReasons.join("; "), at: new Date().toISOString(), candidateId });
             if (accepted && !tooMany) nAcc++;
@@ -2223,6 +2341,10 @@ export default function App() {
               repairs: rec.repairs,
               checks: { ...rec.checks, ...res.checks },
               anchor_match: res.anchor_match,
+              slot_id: slotMatch?.slot_id || "",
+              target_quarter: slotMatch?.quarter ?? (batch.length === 1 ? batch[0].quarter : null),
+              anchor_quarter: aQuarter,
+              target_focus: slotMatch?.focus || null,
               anchor_loc: res.anchor_loc,
               anchor2_loc: res.anchor2_loc,
               item: rec.item,
@@ -2402,7 +2524,8 @@ export default function App() {
   /* autosave whenever something worth keeping changes */
   useEffect(() => {
     if (!sessionId.current) return;
-    if (screen === "setup") return;
+    /* nothing to save until the questions exist; focus reading keeps its own draft */
+    if (screen === "setup" || screen === "focus") return;
     const t = setTimeout(() => {
       persistNow();
     }, 1200);
@@ -2411,7 +2534,7 @@ export default function App() {
 
   useEffect(() => {
     const flush = () => {
-      if (sessionId.current && screen !== "setup") persistNow();
+      if (sessionId.current && screen !== "setup" && screen !== "focus") persistNow();
     };
     document.addEventListener("visibilitychange", flush);
     window.addEventListener("pagehide", flush);
@@ -2463,6 +2586,21 @@ export default function App() {
     rejectedRef.current = [];
     setSelection("");
     saved.current = false;
+    if (source.focusFirst) {
+      setScreen("focus");
+      return;
+    }
+    setScreen("session");
+    runGeneration(source);
+  };
+
+  /* focus reading finished: log it, then write the questions */
+  const finishReading = (reading) => {
+    const pid = passageId(src.passage);
+    const record = { ...reading, passage_id: pid, session_id: sessionId.current, app_version: APP_VERSION };
+    logReading(record);
+    const source = { ...src, reading: record };
+    setSrc(source);
     setScreen("session");
     runGeneration(source);
   };
@@ -2605,6 +2743,18 @@ export default function App() {
       </button>
 
       {screen === "setup" && <Setup onStart={start} onResume={resume} />}
+      {screen === "focus" && (
+        <FocusReading
+          passage={src.passage}
+          structure={structure}
+          title={src.meta?.title || ""}
+          plan={src.plan}
+          learner={learnerText(loadConfig())}
+          draftKey={"ql:focus:" + passageId(src.passage)}
+          onFinish={finishReading}
+          onExit={() => setScreen("setup")}
+        />
+      )}
 
       {(screen === "session" || screen === "open") && (
         <div>

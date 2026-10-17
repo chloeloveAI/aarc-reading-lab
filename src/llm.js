@@ -292,10 +292,19 @@ async function callCloud(prompt, cfg, maxTokens, mode = "schema") {
     content_chars: content.length,
   };
   /* same message as the Ollama path, so the app diagnoses it the same way */
-  if (data?.finish_reason === "length" || !content) {
+  if (data?.finish_reason === "length") {
     const used = `${data?.usage?.completion_tokens ?? "?"} of ${Math.min(maxTokens, 4000)} output tokens`;
     throw new Error(
       `Output truncated: the answer reached the output limit (${used}) before the JSON was complete. Reasoning: none.`
+    );
+  }
+  /* v10.4: an empty reply is not a truncation — say what the provider reported */
+  if (!content) {
+    const fr = data?.finish_reason || "none";
+    throw new Error(
+      /filter|safety|content/i.test(fr)
+        ? `Provider filtered the reply (finish reason: ${fr}).`
+        : `Empty reply from the cloud model (finish reason: ${fr}).`
     );
   }
   return content;
