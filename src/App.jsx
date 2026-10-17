@@ -39,7 +39,7 @@ import {
   logReading,
 } from "./research";
 import FocusReading from "./FocusReading";
-import { lineQuarters, passageWithQuarters, buildBlueprint, blueprintSummary, COVERAGE_VERSION } from "./coverage";
+import { lineQuarters, passageWithQuarters, buildBlueprint, blueprintSummary, COVERAGE_VERSION, stemLocationProblem, keyPlan, placeKey } from "./coverage";
 import { loadFlags, exportFlagsCSV, exportFlagsJSON, agreement } from "./flags";
 import {
   complete,
@@ -526,6 +526,21 @@ function checkItem(item, structure, { l3Strict = true } = {}) {
   checks.anchor_found = !!a;
   if (!a) reasons.push(item.anchor ? "Evidence span not found in the passage" : "No evidence span given");
 
+  /* v10.4: if the stem names a section ("the final section", "Section 3"), the evidence must be there */
+  checks.location_consistent = null;
+  if (a && a.section) {
+    const sections = structure.sections || [];
+    const problem = stemLocationProblem(item.stem, a.section.n, sections.length);
+    checks.location_consistent = !problem;
+    if (problem) {
+      /* for process 3 the named section may hold the second span instead */
+      const b2 = item.anchor2 ? locate(structure, item.anchor2) : null;
+      const ok2 = b2?.section && !stemLocationProblem(item.stem, b2.section.n, sections.length);
+      if (ok2) checks.location_consistent = true;
+      else reasons.push(problem);
+    }
+  }
+
   /* processes 2–4: the answer must not simply be printed in one sentence */
   checks.not_copied = null;
   if (item.level >= 2) {
@@ -580,11 +595,14 @@ function checkItem(item, structure, { l3Strict = true } = {}) {
 
 function hintSteps(item, where, where2) {
   const steps = [];
+  /* v10.4: process 3 joins two places, so every location hint names both.
+     Pointing at one place first taught readers to treat it as a one-place question. */
+  const both = item.level === 3 && where2?.section;
   if (where?.section) steps.push({ kind: "section" });
   else if (item.hint) steps.push({ kind: "locator" });
-  /* a paragraph step only narrows anything if the section has more than one */
-  if (where?.para && (where.section?.paras || 0) > 1) steps.push({ kind: "paragraph" });
-  if (item.level === 3 && where2) steps.push({ kind: "second" });
+  /* a paragraph step only narrows anything if a section has more than one */
+  const multi = (w) => w?.para && (w.section?.paras || 0) > 1;
+  if (multi(where) || (both && multi(where2))) steps.push({ kind: "paragraph" });
   if (item.keyword) steps.push({ kind: "keyword" });
   if (item.guide) steps.push({ kind: "guide" });
   if (where) steps.push({ kind: "evidence" });
@@ -695,14 +713,17 @@ function Climb({ counts, answered, current }) {
 
 /* focus: "none" | "section" | "paragraph" | "sentence" — how much of the
    evidence location the learner has earned so far. */
-function PassagePanel({ prompt, structure, compact, where, focus, onWord, onSelect }) {
+function PassagePanel({ prompt, structure, compact, where, where2, focus, onWord, onSelect }) {
   const { lines, heading, sectionOf, paraOf, sections } = structure;
   const hit = focus === "none" || !where ? null : where;
+  /* v10.4: process 3 — the second place is shown at every step, like the first */
+  const hit2 = hit && where2 ? where2 : null;
   const box = useRef(null);
   const lineEls = useRef({});
 
-  const inSection = (i) => hit && hit.section && sectionOf[i] === hit.section.n - 1;
-  const inPara = (i) => inSection(i) && hit.para && paraOf[i] === hit.para;
+  const inSec1 = (h, i) => h && h.section && sectionOf[i] === h.section.n - 1;
+  const inSection = (i) => inSec1(hit, i) || inSec1(hit2, i);
+  const inPara = (i) => (inSec1(hit, i) && hit.para && paraOf[i] === hit.para) || (inSec1(hit2, i) && hit2.para && paraOf[i] === hit2.para);
 
   /* bring the earned location into view — the section start, the paragraph, or the evidence line */
   useEffect(() => {
@@ -717,20 +738,28 @@ function PassagePanel({ prompt, structure, compact, where, focus, onWord, onSele
 
   const renderLine = (line, i) => {
     /* exact hit → highlight just the span; fuzzy → tint the line */
-    if (hit && hit.line === i && focus === "sentence" && hit.exact) {
-      const idx = norm(line).indexOf(hit.needle);
-      const pre = line.slice(0, idx);
-      const mid = line.slice(idx, idx + hit.needle.length);
-      const post = line.slice(idx + hit.needle.length);
-      return (
-        <>
-          <Words text={pre} onWord={onWord} />
-          <mark style={{ background: C.amber, padding: "1px 2px", borderRadius: 2 }}>
-            <Words text={mid} onWord={onWord} />
+    const spans = focus === "sentence"
+      ? [hit, hit2]
+          .filter((h) => h && h.line === i && h.exact)
+          .map((h) => ({ from: norm(line).indexOf(h.needle), len: h.needle.length }))
+          .filter((m) => m.from > -1)
+          .sort((a, b) => a.from - b.from)
+      : [];
+    if (spans.length) {
+      const parts = [];
+      let pos = 0;
+      spans.forEach((m, k) => {
+        const from = Math.max(m.from, pos);
+        if (from > pos) parts.push(<Words key={"t" + k} text={line.slice(pos, from)} onWord={onWord} />);
+        parts.push(
+          <mark key={"m" + k} style={{ background: C.amber, padding: "1px 2px", borderRadius: 2 }}>
+            <Words text={line.slice(from, m.from + m.len)} onWord={onWord} />
           </mark>
-          <Words text={post} onWord={onWord} />
-        </>
-      );
+        );
+        pos = Math.max(pos, m.from + m.len);
+      });
+      parts.push(<Words key="end" text={line.slice(pos)} onWord={onWord} />);
+      return <>{parts}</>;
     }
     return <Words text={line} onWord={onWord} />;
   };
@@ -746,11 +775,14 @@ function PassagePanel({ prompt, structure, compact, where, focus, onWord, onSele
       {hit && (
         <div className="px-4 py-2" style={{ borderBottom: `1px solid ${C.line}`, background: C.tealSoft }}>
           <span style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.08em", textTransform: "uppercase", color: C.teal }}>
-            {focus === "sentence"
-              ? "Evidence marked"
-              : focus === "paragraph"
-              ? "Narrowed to " + sectionLabel(hit.section).split(" · ")[0] + ", paragraph " + hit.para
-              : "Narrowed to " + sectionLabel(hit.section)}
+            {(() => {
+              const short = (h) => sectionLabel(h.section).split(" · ")[0];
+              const places = [hit, hit2].filter((h) => h && h.section).sort((a, b) => a.section.n - b.section.n || a.para - b.para);
+              if (focus === "sentence") return places.length > 1 ? "Both pieces of evidence marked" : "Evidence marked";
+              if (focus === "paragraph") return "Narrowed to " + places.map((h) => short(h) + ", paragraph " + (h.para || 1)).join(" and ");
+              const secs = [...new Set(places.map((h) => sectionLabel(h.section)))];
+              return "Narrowed to " + secs.join(" and ");
+            })()}
           </span>
         </div>
       )}
@@ -786,8 +818,8 @@ function PassagePanel({ prompt, structure, compact, where, focus, onWord, onSele
           const isHead = heading[i];
           const isCode = /^\s*(\||```|\s{4})/.test(line);
           const sectionBand = focus === "section" && inSection(i);
-          const paraBand = (focus === "paragraph" && inPara(i)) || (focus === "sentence" && hit && hit.line === i && !hit.exact);
-          const evidenceLine = focus === "sentence" && hit && hit.line === i;
+          const paraBand = (focus === "paragraph" && inPara(i)) || (focus === "sentence" && [hit, hit2].some((h) => h && h.line === i && !h.exact));
+          const evidenceLine = focus === "sentence" && [hit, hit2].some((h) => h && h.line === i);
           if (isHead)
             return (
               <div key={i} ref={(el) => (lineEls.current[i] = el)}>
@@ -1323,9 +1355,27 @@ function HintLadder({ item, where, where2, steps, hintLevel, onHint, contextLine
         HINT {i + 1}
       </span>
     );
+    if (s.kind === "section" && item.level === 3 && where2?.section)
+      return where2.section.n === where.section.n ? (
+        <p style={row}>{tag}This question joins two paragraphs of <strong>{sectionLabel(where.section)}</strong>. Read both.</p>
+      ) : (
+        <p style={row}>
+          {tag}This question joins two parts of the text:{" "}
+          <strong>{sectionLabel(where.section.n < where2.section.n ? where.section : where2.section)}</strong> and{" "}
+          <strong>{sectionLabel(where.section.n < where2.section.n ? where2.section : where.section)}</strong>. Read both.
+        </p>
+      );
     if (s.kind === "section")
       return <p style={row}>{tag}Look in <strong>{sectionLabel(where.section)}</strong>.</p>;
     if (s.kind === "locator") return <p style={row}>{tag}{item.hint}</p>;
+    if (s.kind === "paragraph" && item.level === 3 && where2?.section) {
+      const [p, q] = (where.section.n < where2.section.n || (where.section.n === where2.section.n && where.para <= where2.para)) ? [where, where2] : [where2, where];
+      return (
+        <p style={row}>
+          {tag}Focus on <strong>paragraph {p.para || 1}</strong> of Section {p.section.n} and <strong>paragraph {q.para || 1}</strong> of Section {q.section.n}. How do the two parts relate?
+        </p>
+      );
+    }
     if (s.kind === "paragraph")
       return <p style={row}>{tag}Focus on <strong>paragraph {where.para}</strong> of Section {where.section?.n}.</p>;
     if (s.kind === "keyword")
@@ -1428,9 +1478,16 @@ function Question({ item, slotNo, total, answer, onAnswer, onNext, onPrev, isLas
   return (
     <div>
       <div className="flex items-baseline justify-between gap-4">
-        <Eyebrow color={C.teal}>
-          {L.pirls}
-        </Eyebrow>
+        <span>
+          <Eyebrow color={C.teal}>
+            {L.pirls}
+          </Eyebrow>
+          {item.focusKind === "vocab" && (
+            <span className="block mt-1" style={{ fontFamily: F.ui, fontSize: 12, color: C.slate }}>
+              A word you saved while reading · the sentence is marked in the passage
+            </span>
+          )}
+        </span>
         <span className="flex items-baseline gap-3" style={{ fontFamily: F.mono, fontSize: 11, color: C.mute, whiteSpace: "nowrap" }}>
           {slotNo > 1 && (
             <button onClick={onPrev} className="ql-focus" style={{ fontFamily: F.mono, fontSize: 11, color: C.slate, textDecoration: "underline" }}>
@@ -2067,7 +2124,8 @@ export default function App() {
   /* the passage shows only the location the learner has asked for.
      After answering, the evidence is shown as feedback. */
   const earned = steps.slice(0, hintLevel).map((s) => s.kind);
-  const passageFocus = hasAnswered
+  /* a question on a word she saved tests the word, not finding it: show the sentence at once */
+  const passageFocus = hasAnswered || item?.focusKind === "vocab"
     ? "sentence"
     : earned.includes("evidence")
     ? "sentence"
@@ -2124,6 +2182,8 @@ export default function App() {
     const blueprint = buildBlueprint(source.plan.counts, source.reading?.focus || []);
     const filledSlots = new Set();
     const usedAnchors = [];
+    /* v10.4: spread the correct answer evenly over A–D (models favour A) */
+    const keyOrder = keyPlan(runId);
     const pmeta = source.meta || {};
     logPassage(pid, source.passage, {
       title: pmeta.title || (source.passage || "").slice(0, 70).replace(/\s+/g, " "),
@@ -2261,6 +2321,11 @@ export default function App() {
           const reasons = [];
           const logged = records.map((rec) => {
             const candidateId = runId + "-P" + L.n + "-" + String(++nCand).padStart(3, "0");
+            if (rec.item) {
+              const moved = placeKey(rec.item.options, keyOrder[(nCand - 1) % 4], candidateId);
+              rec.item = { ...rec.item, options: moved.options, key_original_index: moved.from };
+              if (moved.from !== moved.to) rec.repairs.push("options reordered: key moved from " + LETTERS[moved.from] + " to " + LETTERS[moved.to]);
+            }
             let res = { checks: {}, reasons: [], anchor_loc: null, anchor2_loc: null, anchor_match: "none" };
             if (rec.item && (L.n === 3 || L.n === 4)) l3Pending.push({ candidateId, item: rec.item, process: L.n });
             if (rec.item) {
@@ -2916,6 +2981,7 @@ export default function App() {
                       structure={structure}
                       compact
                       where={screen === "open" ? openFocus.where : where}
+                      where2={screen === "open" ? null : item?.level === 3 ? where2 : null}
                       focus={screen === "open" ? openFocus.focus : passageFocus}
                       onWord={(word, sentence) => setLookup({ word, sentence })}
                       onSelect={setSelection}
@@ -2937,6 +3003,7 @@ export default function App() {
                   prompt={src.prompt}
                   structure={structure}
                   where={screen === "open" ? openFocus.where : where}
+                  where2={screen === "open" ? null : item?.level === 3 ? where2 : null}
                   focus={screen === "open" ? openFocus.focus : passageFocus}
                   onWord={(word, sentence) => setLookup({ word, sentence })}
                   onSelect={setSelection}

@@ -154,3 +154,67 @@ export function blueprintSummary(slots) {
   slots.forEach((s) => per[s.quarter - 1]++);
   return { per_quarter: per, targeted: slots.filter((s) => s.focus).length, total: slots.length };
 }
+
+/* v10.4: a stem that names a part of the text must name the right part.
+   Only section-level phrases are checked; paragraph references are too
+   ambiguous to judge by code. Returns a reason string, or "" if fine.
+   anchorSection: 1-based section of the evidence; totalSections: count. */
+const ORDINALS = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10 };
+export function stemLocationProblem(stem, anchorSection, totalSections) {
+  const s = String(stem || "").toLowerCase();
+  if (!anchorSection || !totalSections) return "";
+  if (/\bquarter\b/.test(s)) return "The question mentions a 'quarter' of the text (planning marker, not part of the text)";
+  const named = [];
+  if (/\b(final|last|concluding|closing)\s+(section|part)\b/.test(s)) named.push(totalSections);
+  if (/\b(opening|introductory)\s+(section|part)\b|\bfirst\s+section\b|\bthe introduction\b/.test(s)) named.push(1);
+  for (const m of s.matchAll(/\bsection\s+(\d{1,2})\b/g)) named.push(Number(m[1]));
+  for (const m of s.matchAll(/\b(second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+section\b/g)) named.push(ORDINALS[m[1]]);
+  if (!named.length) return "";
+  return named.includes(anchorSection)
+    ? ""
+    : `The question names section ${named.join("/")} but its evidence is in section ${anchorSection}`;
+}
+
+/* ---------------------- answer-key positions ------------------------ *
+ * Models tend to put the correct option first. After an item is written,
+ * the correct option is moved to a planned position and the distractors
+ * are reordered. Deterministic (seeded), so the same run always shows the
+ * same order; the original position is logged.                           */
+function seeded(str) {
+  let h = 1779033703 ^ String(str).length;
+  for (let i = 0; i < String(str).length; i++) h = Math.imul(h ^ String(str).charCodeAt(i), 3432918353), (h = (h << 13) | (h >>> 19));
+  return () => {
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    return ((h ^= h >>> 16) >>> 0) / 4294967296;
+  };
+}
+
+/* a permutation of 0..3 for a run: candidate k gets key position plan[k % 4],
+   so every block of four candidates uses each letter once */
+export function keyPlan(runId) {
+  const r = seeded("keys:" + runId);
+  const p = [0, 1, 2, 3];
+  for (let i = p.length - 1; i > 0; i--) {
+    const j = Math.floor(r() * (i + 1));
+    [p[i], p[j]] = [p[j], p[i]];
+  }
+  return p;
+}
+
+/* returns { options, from, to }: the correct option moved to `target`,
+   distractors shuffled with a seed. Leaves anything without exactly one
+   key untouched. */
+export function placeKey(options, target, seed) {
+  const from = options.findIndex((o) => o.correct);
+  if (from < 0 || options.filter((o) => o.correct).length !== 1 || target < 0 || target >= options.length) return { options, from, to: from };
+  const r = seeded("opts:" + seed);
+  const rest = options.filter((_, i) => i !== from);
+  for (let i = rest.length - 1; i > 0; i--) {
+    const j = Math.floor(r() * (i + 1));
+    [rest[i], rest[j]] = [rest[j], rest[i]];
+  }
+  const out = [...rest];
+  out.splice(target, 0, options[from]);
+  return { options: out, from, to: target };
+}
