@@ -593,21 +593,26 @@ function checkItem(item, structure, { l3Strict = true } = {}) {
   };
 }
 
+/* v10.4 hint ladder: help with THINKING first, location only as a last resort.
+   A location hint turns reading into search, so it comes last, names the
+   section(s) only (both for process 3), and is labelled strong help.
+   The exact sentence is never shown before answering; after answering it is
+   shown as feedback. */
+const STRATEGY = {
+  1: "The answer is stated in the text. First decide what kind of detail the question wants: a number, a name, a place, a time or a reason. Then look for that kind of detail.",
+  2: "The answer is not stated in one place. What do the nearby sentences suggest when you put them together?",
+  3: "This question joins ideas from two different parts of the text. Which two ideas does it ask you to connect, and how are they related?",
+  4: "This question asks you to judge the text, not just find something in it. Think about how strong the evidence is, what is missing, or why the writer chose these words.",
+};
 function hintSteps(item, where, where2) {
-  const steps = [];
-  /* v10.4: process 3 joins two places, so every location hint names both.
-     Pointing at one place first taught readers to treat it as a one-place question. */
-  const both = item.level === 3 && where2?.section;
-  if (where?.section) steps.push({ kind: "section" });
-  else if (item.hint) steps.push({ kind: "locator" });
-  /* a paragraph step only narrows anything if a section has more than one */
-  const multi = (w) => w?.para && (w.section?.paras || 0) > 1;
-  if (multi(where) || (both && multi(where2))) steps.push({ kind: "paragraph" });
+  const steps = [{ kind: "strategy" }];
   if (item.keyword) steps.push({ kind: "keyword" });
   if (item.guide) steps.push({ kind: "guide" });
-  if (where) steps.push({ kind: "evidence" });
+  if (where?.section) steps.push({ kind: "section" });
+  else if (item.hint) steps.push({ kind: "locator" });
   return steps;
 }
+const LOCATION_KINDS = ["section", "locator", "paragraph", "evidence"];
 
 function splitTranscript(text) {
   const lines = text.split("\n");
@@ -791,7 +796,7 @@ function PassagePanel({ prompt, structure, compact, where, where2, focus, onWord
         className="px-4 py-4 overflow-y-auto"
         onMouseUp={() => {
           const t = String(window.getSelection?.() || "").trim();
-          if (t.length > 2 && t.length < 400 && onSelect) onSelect(t);
+          if (t.length > 2 && t.length < 1500 && onSelect) onSelect(t);
         }}
         style={{ maxHeight: compact ? 340 : "calc(100vh - 220px)", position: "relative" }}
       >
@@ -1351,10 +1356,12 @@ function HintLadder({ item, where, where2, steps, hintLevel, onHint, contextLine
 
   const render = (s, i) => {
     const tag = (
-      <span style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.08em", color: C.slate, marginRight: 8 }}>
+      <span style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.08em", color: LOCATION_KINDS.includes(s.kind) ? C.brick : C.slate, marginRight: 8 }}>
         HINT {i + 1}
+        {LOCATION_KINDS.includes(s.kind) ? " · STRONG HELP" : ""}
       </span>
     );
+    if (s.kind === "strategy") return <p style={row}>{tag}{STRATEGY[item.level] || STRATEGY[2]}</p>;
     if (s.kind === "section" && item.level === 3 && where2?.section)
       return where2.section.n === where.section.n ? (
         <p style={row}>{tag}This question joins two paragraphs of <strong>{sectionLabel(where.section)}</strong>. Read both.</p>
@@ -1464,7 +1471,12 @@ function HintLadder({ item, where, where2, steps, hintLevel, onHint, contextLine
           className="ql-focus mt-2"
           style={{ fontFamily: F.ui, fontSize: 13, color: C.slate, textDecoration: "underline" }}
         >
-          {hintLevel === 0 ? "I'm stuck — give me a hint" : "Next hint"} ({hintLevel + 1} of {steps.length})
+          {hintLevel === 0
+            ? "I'm stuck — give me a hint"
+            : LOCATION_KINDS.includes(steps[hintLevel]?.kind)
+            ? "Show me where to look (strong help)"
+            : "Next hint"}{" "}
+          ({hintLevel + 1} of {steps.length})
         </button>
       )}
     </div>
@@ -1852,8 +1864,9 @@ function Review({ byLevel, answers, onRestart, onRetry, rejected = [], shortfall
   const total = rows.reduce((s, r) => s + r.done, 0);
   const correct = rows.reduce((s, r) => s + r.right, 0);
   const given = Object.values(answers);
-  const noHint = given.filter((a) => !a.hints).length;
-  const sawEvidence = given.filter((a) => (a.hintKinds || []).includes("evidence")).length;
+  const noHint = given.filter((a) => !a.hints && !(a.coach || []).length).length;
+  const sawEvidence = given.filter((a) => a.locationShown || (a.hintKinds || []).some((k) => ["section", "locator", "paragraph", "evidence"].includes(k))).length;
+  const usedCoach = given.filter((a) => (a.coach || []).length).length;
   const attempted = rows.filter((r) => r.done > 0);
   const weakest = attempted.slice().sort((a, b) => a.right / a.done - b.right / b.done)[0];
   const missed = [];
@@ -1875,7 +1888,7 @@ function Review({ byLevel, answers, onRestart, onRetry, rejected = [], shortfall
       </h2>
       {given.length > 0 && (
         <p className="mt-2" style={{ fontFamily: F.mono, fontSize: 12, color: C.slate }}>
-          {noHint} of {given.length} answered without a hint · {sawEvidence} needed the evidence shown
+          {noHint} of {given.length} answered without help · {sawEvidence} needed to be shown where to look · {usedCoach} used the question coach
         </p>
       )}
       {shortfalls.length > 0 && (
@@ -2085,6 +2098,8 @@ export default function App() {
   const [showVocab, setShowVocab] = useState(false);
   const [lookup, setLookup] = useState(null);
   const [hintMap, setHintMap] = useState({});
+  /* v10.4: question-coach use per question (counts as help) */
+  const [coachMap, setCoachMap] = useState({});
   const [openFocus, setOpenFocus] = useState({ where: null, focus: "none" });
   const rejectedRef = useRef([]);
   const runRef = useRef(null);
@@ -2127,10 +2142,6 @@ export default function App() {
   /* a question on a word she saved tests the word, not finding it: show the sentence at once */
   const passageFocus = hasAnswered || item?.focusKind === "vocab"
     ? "sentence"
-    : earned.includes("evidence")
-    ? "sentence"
-    : earned.includes("paragraph")
-    ? "paragraph"
     : earned.includes("section")
     ? "section"
     : "none";
@@ -2684,6 +2695,11 @@ export default function App() {
         correct: !!item.options[choice].correct,
         hints: hintLevel,
         hintKinds: earned,
+        /* coach turns BEFORE answering count as help; turns after answering are feedback */
+        coach: (coachMap[qKey] || []).filter((u) => !u.answered),
+        coachAfter: (coachMap[qKey] || []).filter((u) => u.answered),
+        helped: hintLevel > 0 || (coachMap[qKey] || []).some((u) => !u.answered),
+        locationShown: earned.some((k) => LOCATION_KINDS.includes(k)),
         wordGrade: wordGrades.current[qKey] || null,
       },
     }));
@@ -2743,6 +2759,10 @@ export default function App() {
           prompt={src.prompt}
           intent={intent}
           currentStem={item?.stem}
+          item={screen === "session" && item ? item : null}
+          answered={hasAnswered}
+          learner={learnerText(loadConfig())}
+          onUse={(u) => setCoachMap((m) => ({ ...m, [qKey]: [...(m[qKey] || []), u] }))}
           onClose={() => setAsking(false)}
         />
       )}
