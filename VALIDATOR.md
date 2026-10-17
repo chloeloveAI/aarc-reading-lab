@@ -31,6 +31,8 @@ Every item the model returns is a **candidate**. Each candidate runs through the
 
 | `location_consistent` | all processes | if the stem names a section ("the final/last/concluding section", "the opening/first section", "Section N", "the third section"), the evidence (or, for process 3, either span) is in that section; any mention of a "quarter" fails | **new in v10.2.** Paragraph references ("the last paragraph") are not checked: too ambiguous for code. `n/a` when the stem names no section. |
 
+| `no_planning_labels` | all processes | no field the reader sees (stem, options, "why", link, hint, guide, takeaway, keyword meaning) contains a quarter label such as "Q2" or "quarter 3" | **new in v10.2.** Ordinary phrases such as "a quarter of the cost" are allowed. |
+
 In v10.2 an anchor shortened with "…" or "..." is found when every piece occurs, in order, in one line (logged as an exact match). In v10.1 these were rejected as "Evidence span not found".
 
 ## Retries and shortfalls

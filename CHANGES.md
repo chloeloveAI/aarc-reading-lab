@@ -46,7 +46,11 @@ Prompt `items-v10.3` · validator `validator-v10.2` · coverage `coverage-v2` ·
 - The quarter of evidence, highlights and saved words is judged by sentence, not by paragraph.
 - Runs made with coverage-v1 on long-paragraph passages may show false shortfalls; check `coverage_version` in the run record.
 
-## 7. Tests
+## 7. Key-word hint moved last; no quarter labels anywhere
+- The key-word hint ("Think about 'direction'. What does it mean here?") is now the LAST step, after "where to look". It is taken from the evidence sentence, so before the location it could not be answered, and searching for the word led straight to the evidence. Order now: strategy · guiding question · where to look (strong help) · key word.
+- New check `no_planning_labels`: an item is rejected if any text the reader sees (stem, options, "why", link, hints) contains a quarter label such as "Q1" or "quarter 3". The earlier stem check rejected every "quarter"; ordinary phrases like "a quarter of the cost" are now allowed.
+
+## 8. Tests
 - New: `tests/focusCoverage.test.mjs` (17 deterministic cases: quarters, the coverage plan, the tutor's read-so-far text, the coverage block in the prompt, section-name check, answer-key positions, the coach's leak check, long-paragraph and short-text quarters).
 
 # Changes — 15 Oct 2026
