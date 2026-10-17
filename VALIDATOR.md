@@ -1,4 +1,4 @@
-# Quality checks on generated items (validator-v10.1)
+# Quality checks on generated items (validator-v10.2)
 
 Every item the model returns is a **candidate**. Each candidate runs through the checks below and is logged with the result of every check (`pass` / `fail` / `n/a`) and its rejection reasons, **whether it is accepted or not**.
 
@@ -25,6 +25,13 @@ Every item the model returns is a **candidate**. Each candidate runs through the
 | `anchor2_distinct` | process 3 | the two spans are not the same text | |
 | `cross_paragraph` | process 3 | the spans are in different paragraphs | **An AARC-specific experimental constraint, not a PIRLS rule.** Enforced only in strict mode (`l3_strict`, on by default). With strict mode off, the result is still recorded but doesn't reject. |
 | `not_duplicate` | all processes | the stem is not a repeat of an earlier stem in the same run | |
+| `distinct_evidence` | all processes | ≥60% of the anchor's content words (≥3 needed) do not already appear in the anchor of an earlier accepted item in the run | **new in v10.2.** Stops several questions hanging on one fact (e.g. three items on the same comparison). Can reject a valid item on a short passage; the rejection is logged. |
+| `in_target_quarter` | all processes | the anchor is in the quarter the coverage plan gave this slot | **new in v10.2.** After `requested × 2` calls for a process the quarter is relaxed: the item is accepted, this check is recorded as `fail`, and `repairs` says so. |
+| `focus_addressed` | targeted slots only | saved word: the word is in the keyword, stem or anchor. Highlight / tutor part: an evidence span is in the highlighted lines, or ≥50% of the anchor's content words are in the highlighted text | **new in v10.2.** `n/a` for slots without reader focus. A heuristic: it checks the evidence, not whether the item really tests understanding of that part. |
+
+| `location_consistent` | all processes | if the stem names a section ("the final/last/concluding section", "the opening/first section", "Section N", "the third section"), the evidence (or, for process 3, either span) is in that section; any mention of a "quarter" fails | **new in v10.2.** Paragraph references ("the last paragraph") are not checked: too ambiguous for code. `n/a` when the stem names no section. |
+
+In v10.2 an anchor shortened with "…" or "..." is found when every piece occurs, in order, in one line (logged as an exact match). In v10.1 these were rejected as "Evidence span not found".
 
 ## Retries and shortfalls
 

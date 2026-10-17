@@ -1,3 +1,40 @@
+# Changes — v10.4 (17 Oct 2026)
+
+Prompt `items-v10.3` · validator `validator-v10.2` · coverage `coverage-v1` · tutor `tutor-v1` · app `aarc-reading-lab-v10.4`.
+**Runs before and after this change are not comparable without noting the version.**
+
+## 1. Cloud model (OpenRouter) through the site
+- New provider **Cloud (OpenRouter)**. The browser sends only an access code to `netlify/functions/llm.mjs`; the OpenRouter key (`OPENROUTER_API_KEY`), the model (`MODEL`) and the code (`APP_ACCESS_CODE`) live in Netlify environment variables.
+- Thinking is turned off for reasoning models and JSON mode is used for structured requests. Output is capped at 4,000 tokens per call.
+- Cloud runs are logged with provider `openrouter` and the model name OpenRouter reports in its reply. A hosted model has no digest: it can change without notice, so record the run date.
+- An empty cloud reply is now logged as `empty_reply` (or `provider_filtered`), not as `output_truncated`.
+
+## 2. Focus reading (before any questions)
+- Turn on **Start with focus reading** on the start screen (on by default). The reader reads the passage alone first, with a count-up timer. Active time pauses while the tab is hidden.
+- Tap a word for its meaning; **Add to my vocabulary** marks it as new to the reader.
+- Select a sentence, several sentences or a paragraph (the ¶ button selects a paragraph) → **Highlight**, or **Explain this** to open the tutor.
+- The **tutor** sees only the highlighted part and the text before it, never the rest of the passage. It explains in a short dialogue, offers a check question and follow-ups, and must not hint at later text.
+- Progress = how far into the text the highlights reach (% of words). Scroll progress is logged separately.
+- A draft is kept in the browser, so a reload during reading doesn't lose it.
+- Everything is logged as a `reading_sessions` record (look-ups, saved words, highlights, every tutor turn, times). New export: **Focus reading (CSV)**, one row per event.
+
+## 3. Questions written after reading, across the whole text
+- Questions are written when the reader finishes focus reading (6 = 1·2·2·1 or 10 = 2·3·3·2, as before).
+- The passage is split into four quarters by word count. A **coverage plan** gives every question a quarter, so all four quarters are used and no quarter has more than one question above another.
+- Up to **one third** of the questions (2 of 6, 3 of 10) are built around what the reader did: parts she asked the tutor about first, then saved words (as "what does this word mean here?" items, process 2), then highlights. One of each kind is used before a second of any kind.
+- The prompt marks the quarters and lists each item's quarter and focus, plus evidence already used.
+- New checks: `distinct_evidence`, `in_target_quarter`, `focus_addressed` (see VALIDATOR.md). The run record holds `coverage_plan`, `coverage_summary` and `reading_id`; every candidate holds `slot_id`, `target_quarter`, `anchor_quarter` and `target_focus`.
+- Research caveat: targeted questions differ between readers by design. Analyse targeted and untargeted items separately (`target_focus_kind` in the candidates CSV).
+
+## 4. Fixes found in the first preview test
+- **Correct answer was nearly always A.** Models write the key first. The app now moves the correct option to a planned position (each block of four candidates uses A, B, C and D once, in a seeded order per run) and reorders the distractors. The order is fixed per item; the position the model wrote is kept as `key_as_written` in the candidates CSV.
+- **Question named the wrong section** ("roadworks in the final section" when the roadworks are in section 8). New check `location_consistent`: a stem that names a section must match where its evidence is; any mention of a "quarter" is rejected. The prompt also says quarters are for planning only.
+- **Process-3 hints pointed at one place first.** The first two hints named only the first evidence span and the passage outlined only that place, which steered readers into a one-place reading. Now hint 1 names both sections ("This question joins two parts of the text: … and … Read both."), hint 2 names both paragraphs, the passage outlines both places at every step, and the last hint marks both spans. Hint counts before and after this change are not comparable for process 3.
+- **Saved-word questions** must quote the words around the term, and the passage marks that sentence straight away (no hint needed), with the label "A word you saved while reading".
+
+## 5. Tests
+- New: `tests/focusCoverage.test.mjs` (14 deterministic cases: quarters, the coverage plan, the tutor's read-so-far text, the coverage block in the prompt, section-name check, answer-key positions).
+
 # Changes — 15 Oct 2026
 
 ## 1. Hints no longer give the answer away
