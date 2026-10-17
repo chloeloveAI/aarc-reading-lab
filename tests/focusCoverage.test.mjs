@@ -5,10 +5,11 @@
    good items for the planned quarter; that needs a real run. */
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
-import { quarterMap, lineQuarters, quarterStarts, passageWithQuarters, buildBlueprint, blueprintSummary, rankFocus, maxTargeted, stemLocationProblem, keyPlan, placeKey } from "../src/coverage.js";
+import { quarterMap, lineQuarters, quarterStarts, passageWithQuarters, buildBlueprint, blueprintSummary, rankFocus, maxTargeted, stemLocationProblem, keyPlan, placeKey, sentenceSpans, evidenceSpans, normLine } from "../src/coverage.js";
 import { textUpTo, buildTutorPrompt } from "../src/tutor.js";
 import { buildItemPromptV10 } from "../src/prompts.js";
-import { coachLeak } from "../src/coach.js";
+import { coachLeak, buildCoachPrompt } from "../src/coach.js";
+import { normaliseMark, keptShare, buildPremisePrompt, buildImprovePrompt } from "../src/written.js";
 
 const here = new URL(".", import.meta.url);
 const md = readFileSync(new URL("../research/test_passage_free_buses.md", here), "utf8");
@@ -198,6 +199,57 @@ test("Q1", "Question coach: replies that point to a place or repeat the key are 
   assert.match(coachLeak("It shows removing fares attracted people who previously drove or stayed at home.", item), /correct option/);
   assert.equal(coachLeak("'Councillors' are members of the city council. Are they part of the Alliance?", item), "");
   assert.equal(coachLeak("What do you think the writer wants you to notice about the councillors' argument?", item), "");
+});
+
+test("W1", "Written mark: a strong answer under another field name is still found; missing fields never crash", () => {
+  assert.equal(normaliseMark({ verdict: "Developing", strengths: ["a"], missing: [], nudge: "n", model_answer: "MA" }).model, "MA");
+  assert.equal(normaliseMark({ strong_answer: "SA" }).model, "SA");
+  const empty = normaliseMark({});
+  assert.equal(empty.model, "");
+  assert.equal(empty.verdict, "developing");
+  assert.deepEqual(empty.strengths, []);
+});
+
+test("W2", "Improved answer: share of her own words that were kept", () => {
+  const hers = "Free buses helped because more people used them every single day";
+  assert.equal(keptShare(hers, [{ text: hers, added: false }, { text: "On balance it was worth it.", added: true }]), 1);
+  assert.ok(keptShare(hers, [{ text: "A completely different essay about trams.", added: false }]) < 0.2);
+});
+
+test("W3", "Premise and improve prompts carry the question, criteria and her answer", () => {
+  const pp = buildPremisePrompt({ stem: "How well does the framework work?", criteria: ["c1"], passage: "Text." });
+  assert.match(pp, /QUESTION: How well does the framework work\?/);
+  assert.match(pp, /different role/);
+  const ip = buildImprovePrompt({ passage: "Text.", stem: "S", criteria: ["c"], answer: "MY OWN WORDS", missing: ["no judgment"] });
+  assert.match(ip, /MY OWN WORDS/);
+  assert.match(ip, /no judgment/);
+  assert.match(ip, /Keep her own sentences/);
+});
+
+test("E1", "Evidence after answering is marked at sentence level, not the whole paragraph", () => {
+  const P = "Artificial intelligence (AI) is increasingly used, yet students who use AI for schoolwork (e.g., summarizing, drafting texts) score about 20 points lower. Hong Kong students lost even more. Although AI can personalize learning, students may fall into an \u201cillusion of competence,\u201d wherein they produce polished solutions with AI without deep inquiry. Two research gaps remain.";
+  assert.equal(sentenceSpans(P).length, 4, "e.g. must not end a sentence");
+  const pick = (h) => evidenceSpans(P, [h]).map((x) => P.slice(x.from, x.to));
+  const fuzzy = pick({ exact: false, needle: normLine("students may fall into an illusion of competence, producing polished solutions without deep inquiry") });
+  assert.equal(fuzzy.length, 1);
+  assert.match(fuzzy[0], /^Although AI/);
+  const exact = pick({ exact: true, needle: normLine("wherein they produce polished solutions") });
+  assert.deepEqual(exact, fuzzy);
+  const two = pick({ exact: true, needle: normLine("score about 20 points"), pieces: [normLine("score about 20 points"), normLine("hong kong students lost")] });
+  assert.equal(two.length, 2);
+});
+
+test("Q2", "Question coach knows her choice after answering, and can explain the question itself", () => {
+  const item = { stem: "Why?", options: [{ text: "Wrong idea" }, { text: "Right idea", correct: true }, { text: "c" }, { text: "d" }] };
+  const wrong = buildCoachPrompt({ selection: "x", question: "Why is my answer wrong?", passage: "T", item, answered: true, choice: 0 });
+  assert.match(wrong, /SHE CHOSE A \("Wrong idea"\) — WRONG\. The correct option is B\./);
+  assert.match(wrong, /Never tell her she chose the correct answer/);
+  const right = buildCoachPrompt({ selection: "x", question: "q", passage: "T", item, answered: true, choice: 1 });
+  assert.match(right, /SHE CHOSE B — the CORRECT option/);
+  const about = buildCoachPrompt({ selection: "Why?", question: "What is this question asking me?", passage: "T", item, answered: false, aboutQuestion: true });
+  assert.match(about, /ASKING ABOUT THE QUESTION ITSELF/);
+  assert.match(about, /"kind": "clarify"/);
+  assert.doesNotMatch(about, /SHE CHOSE/);
 });
 
 const passed = results.filter((r) => r.pass).length;
