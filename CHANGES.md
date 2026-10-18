@@ -58,6 +58,12 @@ Prompt `items-v10.3` · validator `validator-v10.2` · coverage `coverage-v2` ·
 - Exact quote → every sentence the quote touches. Quote not exact → the run of 1–3 sentences that contains most of the quote's content words. Process 3 marks the sentences for both pieces of evidence.
 - Sentence splitting ignores "e.g.", "i.e.", "Dr.", initials, and full stops followed by a lower-case word. Pure functions `sentenceSpans` and `evidenceSpans` in `src/coverage.js`; test E1.
 
+## 15. AARC Reading Lab: name, step bar, upload a file
+- **Name:** browser tab, setup screen and session header now say "AARC Reading Lab" (`index.html`, `package.json` name `aarc-reading-lab`). The setup copy talks about "a text" rather than "a conversation"; the tabs are "A text" / "An AI chat transcript"; "What you asked" is now "Why you're reading it (optional)" and the box beside the passage only appears when it has content.
+- **Step bar:** Read → Answer → Write (optional) → Results, on every screen after setup (and as a preview on setup). The current step is filled, finished steps show a tick, a skipped written question shows "(skipped)". On phones "(optional)" is hidden so the bar fits one line.
+- **One label style:** section labels, hint tags ("Hint 2 (strong help)"), the passage panel, coach and focus-reading labels changed from small all-caps monospace to sentence-case labels in the UI font. Notes / Words / Model are one button group (no hand-tuned offsets).
+- **Upload a file** (setup, next to "The text to read"): .pdf, .docx, .txt, .md. Read in the browser — nothing is uploaded. PDF via pdf.js 4.10.38 (`isEvalSupported: false`; 3.x has a known malicious-PDF flaw), headings detected by font size, paragraphs by line gaps, hyphenated line breaks joined. Word via mammoth: headings → "## ", list items → "- ". Clear messages for a scanned PDF (no text layer), an old .doc file, or an unsupported type. Both libraries load only when a file is chosen. The file name fills the research-log title if empty. New file `src/fileText.js`; new dependencies `pdfjs-dist`, `mammoth`.
+
 ## 14. The written question can be skipped
 - "Skip the written question" next to "Get feedback" ends the session after the multiple-choice questions (for short sessions). The second self-rating and the results still follow.
 - Logged as `skipped: true` in `written_answers` (column `skipped` in "Written answers (CSV)"); the review shows "Skipped."; Resume goes to the results, not back to the written question.
