@@ -58,6 +58,10 @@ Prompt `items-v10.3` · validator `validator-v10.2` · coverage `coverage-v2` ·
 - Exact quote → every sentence the quote touches. Quote not exact → the run of 1–3 sentences that contains most of the quote's content words. Process 3 marks the sentences for both pieces of evidence.
 - Sentence splitting ignores "e.g.", "i.e.", "Dr.", initials, and full stops followed by a lower-case word. Pure functions `sentenceSpans` and `evidenceSpans` in `src/coverage.js`; test E1.
 
+## 14. The written question can be skipped
+- "Skip the written question" next to "Get feedback" ends the session after the multiple-choice questions (for short sessions). The second self-rating and the results still follow.
+- Logged as `skipped: true` in `written_answers` (column `skipped` in "Written answers (CSV)"); the review shows "Skipped."; Resume goes to the results, not back to the written question.
+
 ## 13. Self-rated understanding (AARC calibration, self-rating-v1)
 - **After focus reading:** before the questions are made, she rates "how much of the text do you think you understand?" on 0–10. "Make my questions" stays disabled until she chooses.
 - **After all questions (and the written question):** the results screen first asks the same question again, before showing any score, so the score cannot shape the rating. Then it shows: after reading x/10 · after the questions y/10 · correct without any help n of N.
