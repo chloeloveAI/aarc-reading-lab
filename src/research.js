@@ -368,7 +368,7 @@ export function exportCallsCSV() {
 export function exportWrittenCSV() {
   const log = loadLog();
   const runs = log.runs || [];
-  const cols = ["written_id", "run_id", "passage_id", "written_version", "stem", "premise_ok", "premise_regenerated", "premise_problems", "answer", "submitted_at", "verdict", "strengths", "missing", "nudge", "revision", "revision_skipped", "revised_at", "improved_verdict", "improved_text", "added_parts", "added_reasons", "kept_share", "strong_answer"];
+  const cols = ["written_id", "run_id", "passage_id", "written_version", "stem", "premise_ok", "premise_regenerated", "premise_problems", "skipped", "answer", "submitted_at", "verdict", "strengths", "missing", "nudge", "revision", "revision_skipped", "revised_at", "improved_verdict", "improved_text", "added_parts", "added_reasons", "kept_share", "strong_answer"];
   const rows = [cols.join(",")];
   for (const w of log.written_answers || []) {
     const run = runs.find((r) => r.run_id === w.run_id);
@@ -380,6 +380,7 @@ export function exportWrittenCSV() {
       premise_ok: w.premise?.ok,
       premise_regenerated: w.premise?.regenerated ? "yes" : "no",
       premise_problems: (w.premise?.attempts || []).flatMap((a) => a.problems || []).join(" | "),
+      skipped: w.skipped ? "yes" : "no",
       submitted_at: w.submittedAt,
       verdict: w.mark?.verdict,
       strengths: (w.mark?.strengths || []).join(" | "),

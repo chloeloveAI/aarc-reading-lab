@@ -1876,7 +1876,23 @@ function OpenQuestion({ q, passage, onDone, structure, onUpdate, onFocus }) {
         </p>
       )}
 
-      {!mark && primary(busy === "mark" ? "Reading your answer…" : "Get feedback", submit, !!busy)}
+      {!mark && (
+        <div className="flex flex-wrap items-center gap-4">
+          {primary(busy === "mark" ? "Reading your answer…" : "Get feedback", submit, !!busy)}
+          {/* v10.4: optional — a short session can end after the multiple-choice questions */}
+          <button
+            onClick={() => {
+              save({ skipped: true, skippedAt: new Date().toISOString(), draft: text });
+              onDone();
+            }}
+            disabled={!!busy}
+            className="ql-focus mt-4"
+            style={{ fontFamily: F.ui, fontSize: 13, color: C.slate, textDecoration: "underline" }}
+          >
+            Skip the written question
+          </button>
+        </div>
+      )}
 
       {mark && (
         <div className="mt-6 pt-5" style={{ borderTop: `1px solid ${C.line}` }}>
@@ -2227,7 +2243,7 @@ function WrittenReview({ q, onOpen }) {
           {body(answer)}
         </>
       ) : (
-        body("Not answered yet.")
+        body(q.skipped ? "Skipped." : "Not answered yet.")
       )}
       {q.revision && (
         <>
@@ -2930,7 +2946,7 @@ export default function App() {
     saved.current = true;
     /* all multiple-choice done: go back to the written question if it is
        unfinished, otherwise to the review (which shows the saved writing) */
-    if (next === -1 && slotsNow.length) setScreen(rec.openQ && !rec.openQ.improved ? "open" : "review");
+    if (next === -1 && slotsNow.length) setScreen(rec.openQ && !rec.openQ.improved && !rec.openQ.skipped ? "open" : "review");
     else setScreen("session");
   };
 
