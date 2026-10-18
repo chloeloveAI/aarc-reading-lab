@@ -58,6 +58,13 @@ Prompt `items-v10.3` · validator `validator-v10.2` · coverage `coverage-v2` ·
 - Exact quote → every sentence the quote touches. Quote not exact → the run of 1–3 sentences that contains most of the quote's content words. Process 3 marks the sentences for both pieces of evidence.
 - Sentence splitting ignores "e.g.", "i.e.", "Dr.", initials, and full stops followed by a lower-case word. Pure functions `sentenceSpans` and `evidenceSpans` in `src/coverage.js`; test E1.
 
+## 13. Self-rated understanding (AARC calibration, self-rating-v1)
+- **After focus reading:** before the questions are made, she rates "how much of the text do you think you understand?" on 0–10. "Make my questions" stays disabled until she chooses.
+- **After all questions (and the written question):** the results screen first asks the same question again, before showing any score, so the score cannot shape the rating. Then it shows: after reading x/10 · after the questions y/10 · correct without any help n of N.
+- "Correct without any help" = answered correctly with no hint and no question coach — the performance side of calibration.
+- Saved in the session (not asked again on Resume) and in the research log (`self_ratings`, one record per reading session, with `answered_total`, `correct_total`, `unaided_correct`). New export "Self-ratings (CSV)". The merge tool combines `self_ratings`.
+- Interpretation note for the paper: a rise from the first to the second rating can reflect familiarity rather than understanding; compare it with unaided performance, not read it as a learning gain on its own.
+
 ## 12. Choosing by letter; word meanings in the question and options; coach knows her choice (coach-v2)
 - **Only the letter chooses.** Each option has a large A/B/C/D button ("choose") on its left. Every word in the question and in the options can now be tapped for its meaning, before and after answering, without choosing that option by mistake.
 - **"What is this question asking?"** under every question opens the question coach on the question itself. Before answering, the coach rephrases the question in simpler words and names the kind of answer wanted (`kind: "clarify"`), without hinting at the answer or the place. It still counts as help (logged with `about: "question"`, so it can be separated from help about the text).
