@@ -16,6 +16,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from "react"
 import { WordCard } from "./Glossary";
 import { tutorTurn, textUpTo, TUTOR_VERSION } from "./tutor";
 import { quarterMap, normLine } from "./coverage";
+import SelfRating, { RATING_VERSION } from "./SelfRating";
 
 const C = {
   ink: "#16202B",
@@ -276,6 +277,8 @@ export default function FocusReading({ passage, structure, title, plan, learner,
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [confirmFinish, setConfirmFinish] = useState(false);
+  /* AARC calibration: how much she thinks she understood, before any question */
+  const [selfRating, setSelfRating] = useState(null);
   const textBox = useRef(null);
   const lastTick = useRef(Date.now());
 
@@ -447,6 +450,8 @@ export default function FocusReading({ passage, structure, title, plan, learner,
       furthest_line_seen: furthest,
       progress_scroll_pct: pctAt(furthest),
       focus,
+      self_rating_after_reading: selfRating,
+      rating_version: RATING_VERSION,
     };
     if (draftKey)
       try {
@@ -511,16 +516,25 @@ export default function FocusReading({ passage, structure, title, plan, learner,
           style={{ background: C.card, borderTop: `2px solid ${C.ink}`, boxShadow: "0 -8px 30px rgba(22,32,43,0.18)", paddingBottom: "calc(16px + env(safe-area-inset-bottom, 0px))" }}
         >
           <div className="max-w-3xl mx-auto">
-          <p style={{ fontFamily: F.ui, fontSize: 15, color: C.ink, lineHeight: 1.5 }}>
+          <p style={{ fontFamily: F.ui, fontSize: 14, color: C.slate, lineHeight: 1.5 }}>
             Finish reading? Your {plan?.counts?.reduce((a, b) => a + b, 0) || ""} questions will be written now, from the whole text. You'll still see the passage while you answer, but you can't come back to focus reading.
           </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button onClick={finish} className="ql-focus px-4 py-2" style={{ background: C.teal, color: C.card, borderRadius: 2, fontFamily: F.ui, fontSize: 14, fontWeight: 700 }}>
+          <div className="mt-3">
+            <SelfRating id="rate-after-reading" value={selfRating} onChange={setSelfRating} question="Before any questions: how much of the text do you think you understand? (0–10)" />
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2 items-center">
+            <button
+              onClick={finish}
+              disabled={selfRating == null}
+              className="ql-focus px-4 py-2"
+              style={{ background: selfRating == null ? C.mute : C.teal, color: C.card, borderRadius: 2, fontFamily: F.ui, fontSize: 14, fontWeight: 700, cursor: selfRating == null ? "not-allowed" : "pointer" }}
+            >
               Make my questions
             </button>
             <button onClick={() => setConfirmFinish(false)} className="ql-focus px-4 py-2" style={{ border: `1px solid ${C.ink}`, color: C.ink, borderRadius: 2, fontFamily: F.ui, fontSize: 14, fontWeight: 700 }}>
               Keep reading
             </button>
+            {selfRating == null && <span style={{ fontFamily: F.ui, fontSize: 12, color: C.slate }}>Choose a number first.</span>}
           </div>
           </div>
         </div>

@@ -46,7 +46,7 @@ export function newRunId() {
 }
 
 function empty() {
-  return { schema: "aarc-research-log/1", passages: {}, runs: [], calls: [], candidates: [], shortfalls: [], diagnostics: [], annotations: [], reading_sessions: [], written_answers: [] };
+  return { schema: "aarc-research-log/1", passages: {}, runs: [], calls: [], candidates: [], shortfalls: [], diagnostics: [], annotations: [], reading_sessions: [], written_answers: [], self_ratings: [] };
 }
 
 export function loadLog() {
@@ -114,6 +114,25 @@ export function logReading(r) {
     log.reading_sessions = log.reading_sessions || [];
     log.reading_sessions.push(r);
   });
+}
+
+/* AARC calibration: "how much do you understand?" (0–10) after reading and after
+   all questions, next to what she actually did. One record per reading session. */
+export function logSelfRating(rec) {
+  append((log) => {
+    log.self_ratings = log.self_ratings || [];
+    const i = log.self_ratings.findIndex((r) => r.rating_id === rec.rating_id);
+    if (i === -1) log.self_ratings.push(rec);
+    else log.self_ratings[i] = { ...log.self_ratings[i], ...rec };
+  });
+}
+
+export function exportRatingsCSV() {
+  const log = loadLog();
+  const cols = ["rating_id", "reading_id", "run_id", "session_id", "passage_id", "after_reading", "after_reading_at", "after_questions", "after_questions_at", "answered_total", "correct_total", "unaided_correct", "unaided_correct_pct", "rating_version"];
+  const rows = [cols.join(",")];
+  for (const r of log.self_ratings || []) rows.push(cols.map((k) => csvCell(r[k])).join(","));
+  download(`aarc-self-ratings-${stamp()}.csv`, "\ufeff" + rows.join("\r\n"), "text/csv");
 }
 
 /* the written question: one record per run, updated as she goes

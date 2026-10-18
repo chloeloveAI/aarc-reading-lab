@@ -39,8 +39,11 @@ import {
   exportWrittenCSV,
   logReading,
   logWritten,
+  logSelfRating,
+  exportRatingsCSV,
 } from "./research";
 import FocusReading from "./FocusReading";
+import SelfRating, { RATING_VERSION } from "./SelfRating";
 import { checkPremise, markAnswer, improveAnswer, strongAnswer, WRITTEN_VERSION } from "./written";
 import { quarterMap, normLine, passageWithQuarters, buildBlueprint, blueprintSummary, COVERAGE_VERSION, stemLocationProblem, keyPlan, placeKey, evidenceSpans } from "./coverage";
 import { loadFlags, exportFlagsCSV, exportFlagsJSON, agreement } from "./flags";
@@ -951,6 +954,7 @@ function ResearchExport({ style }) {
       <button className="ql-focus" style={b} onClick={() => exportLogJSON()}>Full log (JSON)</button>
       <button className="ql-focus" style={b} onClick={exportReadingCSV}>Focus reading (CSV)</button>
       <button className="ql-focus" style={b} onClick={exportWrittenCSV}>Written answers (CSV)</button>
+      <button className="ql-focus" style={b} onClick={exportRatingsCSV}>Self-ratings (CSV)</button>
       <button className="ql-focus" style={b} onClick={() => setInspect(true)}>Inspect candidates</button>
       {inspect && <Inspector onClose={() => setInspect(false)} />}
     </div>
@@ -1995,7 +1999,7 @@ function ImprovedAnswer({ improved }) {
 
 /* ----------------------------- Review ---------------------------- */
 
-function Review({ byLevel, answers, onRestart, onRetry, rejected = [], shortfalls = [], openQ = null, onOpenWritten }) {
+function Review({ byLevel, answers, onRestart, onRetry, rejected = [], shortfalls = [], openQ = null, onOpenWritten, selfRating = {}, onRate }) {
   const rows = LEVELS.map((L) => {
     const items = byLevel[L.n] || [];
     let right = 0;
@@ -2015,6 +2019,41 @@ function Review({ byLevel, answers, onRestart, onRetry, rejected = [], shortfall
   const noHint = given.filter((a) => !a.hints && !(a.coach || []).length).length;
   const sawEvidence = given.filter((a) => a.locationShown || (a.hintKinds || []).some((k) => ["section", "locator", "paragraph", "evidence"].includes(k))).length;
   const usedCoach = given.filter((a) => (a.coach || []).length).length;
+  /* correct with no hint and no coach: the "actual" side of calibration */
+  const unaidedCorrect = given.filter((a) => a.correct && !a.hints && !(a.coach || []).length).length;
+  const [pendingRate, setPendingRate] = useState(null);
+
+  /* AARC calibration: ask how much she understands BEFORE showing any result,
+     so the score cannot shape the rating */
+  if (onRate && given.length > 0 && selfRating.after_questions == null)
+    return (
+      <div className="max-w-2xl mx-auto px-5 py-12">
+        <Eyebrow>Before your results</Eyebrow>
+        <div className="mt-4 px-5 py-5" style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 2 }}>
+          <SelfRating
+            id="rate-after-questions"
+            value={pendingRate}
+            onChange={setPendingRate}
+            question="Now that you've done the questions: how much of the text do you think you understand? (0–10)"
+          />
+          <button
+            onClick={() =>
+              onRate(pendingRate, {
+                answered_total: given.length,
+                correct_total: correct,
+                unaided_correct: unaidedCorrect,
+                unaided_correct_pct: Math.round((unaidedCorrect / given.length) * 100),
+              })
+            }
+            disabled={pendingRate == null}
+            className="ql-focus mt-4 px-5 py-3"
+            style={{ background: pendingRate == null ? C.mute : C.ink, color: C.card, borderRadius: 2, fontFamily: F.ui, fontSize: 14, fontWeight: 700 }}
+          >
+            Show my results
+          </button>
+        </div>
+      </div>
+    );
   const attempted = rows.filter((r) => r.done > 0);
   const weakest = attempted.slice().sort((a, b) => a.right / a.done - b.right / b.done)[0];
   const missed = [];
@@ -2038,6 +2077,19 @@ function Review({ byLevel, answers, onRestart, onRetry, rejected = [], shortfall
         <p className="mt-2" style={{ fontFamily: F.mono, fontSize: 12, color: C.slate }}>
           {noHint} of {given.length} answered without help · {sawEvidence} needed to be shown where to look · {usedCoach} used the question coach
         </p>
+      )}
+      {selfRating.after_questions != null && (
+        <div className="mt-4 px-4 py-3" style={{ background: C.tealSoft, borderRadius: 2 }}>
+          <p style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.teal }}>How well you thought you understood</p>
+          <p className="mt-1" style={{ fontFamily: F.ui, fontSize: 15, color: C.ink, lineHeight: 1.6 }}>
+            {selfRating.after_reading != null && (
+              <>
+                After reading: <b>{selfRating.after_reading}/10</b> ·{" "}
+              </>
+            )}
+            After the questions: <b>{selfRating.after_questions}/10</b> · Correct without any help: <b>{unaidedCorrect} of {given.length}</b>
+          </p>
+        </div>
       )}
       {shortfalls.length > 0 && (
         <p className="mt-1" style={{ fontFamily: F.mono, fontSize: 12, color: C.brick }}>
@@ -2297,6 +2349,8 @@ export default function App() {
   /* v10.4: question-coach use per question (counts as help) */
   const [coachMap, setCoachMap] = useState({});
   const [lookupMap, setLookupMap] = useState({});
+  /* AARC calibration ratings for this session */
+  const [selfRating, setSelfRating] = useState({});
   const [openFocus, setOpenFocus] = useState({ where: null, focus: "none" });
   const rejectedRef = useRef([]);
   const runRef = useRef(null);
@@ -2806,12 +2860,13 @@ export default function App() {
       byLevel,
       answers,
       openQ,
+      selfRating,
       slotIdx,
       rejected: rejectedRef.current,
       run: runRef.current,
       shortfalls: shortfallsRef.current,
     }),
-    [src, intent, byLevel, answers, openQ, slotIdx]
+    [src, intent, byLevel, answers, openQ, selfRating, slotIdx]
   );
 
   const persistNow = useCallback(async () => {
@@ -2834,7 +2889,7 @@ export default function App() {
       persistNow();
     }, 1200);
     return () => clearTimeout(t);
-  }, [answers, byLevel, openQ, screen, persistNow]);
+  }, [answers, byLevel, openQ, selfRating, screen, persistNow]);
 
   useEffect(() => {
     const flush = () => {
@@ -2862,6 +2917,7 @@ export default function App() {
     runRef.current = rec.run || null;
     shortfallsRef.current = rec.shortfalls || [];
     setOpenQ(rec.openQ || null);
+    setSelfRating(rec.selfRating || {});
     setGenErr(null);
     setSelection("");
     setSavedAt(rec.savedAt);
@@ -2887,6 +2943,7 @@ export default function App() {
     setAnswers({});
     setSlotIdx(0);
     setOpenQ(null);
+    setSelfRating({});
     setGenErr(null);
     setIntent(null);
     intentRef.current = null;
@@ -2906,6 +2963,11 @@ export default function App() {
     const pid = passageId(src.passage);
     const record = { ...reading, passage_id: pid, session_id: sessionId.current, app_version: APP_VERSION };
     logReading(record);
+    if (reading.self_rating_after_reading != null) {
+      const r = { rating_id: reading.reading_id, reading_id: reading.reading_id, session_id: sessionId.current, passage_id: pid, after_reading: reading.self_rating_after_reading, after_reading_at: reading.ended_at, rating_version: RATING_VERSION };
+      setSelfRating(r);
+      logSelfRating(r);
+    }
     const source = { ...src, reading: record };
     setSrc(source);
     setScreen("session");
@@ -3297,6 +3359,21 @@ export default function App() {
           shortfalls={shortfallsRef.current}
           openQ={openQ}
           onOpenWritten={() => setScreen("open")}
+          selfRating={selfRating}
+          onRate={(n, stats) => {
+            const r = {
+              ...selfRating,
+              rating_id: selfRating.rating_id || "S" + sessionId.current,
+              session_id: sessionId.current,
+              run_id: runRef.current?.runId || null,
+              after_questions: n,
+              after_questions_at: new Date().toISOString(),
+              rating_version: RATING_VERSION,
+              ...stats,
+            };
+            setSelfRating(r);
+            logSelfRating(r);
+          }}
         />
       )}
     </div>
