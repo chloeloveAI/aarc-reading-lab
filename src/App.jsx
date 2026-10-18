@@ -43,6 +43,7 @@ import {
   exportRatingsCSV,
 } from "./research";
 import FocusReading from "./FocusReading";
+import { readTextFile, FileTextError } from "./fileText";
 import SelfRating, { RATING_VERSION } from "./SelfRating";
 import { checkPremise, markAnswer, improveAnswer, strongAnswer, WRITTEN_VERSION } from "./written";
 import { quarterMap, normLine, passageWithQuarters, buildBlueprint, blueprintSummary, COVERAGE_VERSION, stemLocationProblem, keyPlan, placeKey, evidenceSpans } from "./coverage";
@@ -62,7 +63,8 @@ import {
 } from "./llm";
 
 /* ------------------------------------------------------------------ *
- * Question Ladder — turn a long AI answer into a climb of comprehension
+ * AARC Reading Lab (formerly Question Ladder) — read a text on your own first, then
+ * climb PIRLS-laddered questions about it
  * items, one screen at a time. PIRLS processes 1–4, PISA aspects.
  * ------------------------------------------------------------------ */
 
@@ -127,8 +129,8 @@ const LEVELS = [
 
 /* counts = questions per comprehension process 1–4 */
 const PLANS = {
-  short: { key: "short", label: "Quick practice", counts: [1, 2, 2, 1], note: "6 questions (1·2·2·1) + 1 written" },
-  full: { key: "full", label: "Full practice", counts: [2, 3, 3, 2], note: "10 questions (2·3·3·2) + 1 written" },
+  short: { key: "short", label: "Quick practice", counts: [1, 2, 2, 1], note: "6 questions (1·2·2·1) + 1 written, optional" },
+  full: { key: "full", label: "Full practice", counts: [2, 3, 3, 2], note: "10 questions (2·3·3·2) + 1 written, optional" },
   /* the formal experiment: PIRLS 2026 weighting 20/30/30/20 % (p. 8) */
   research: { key: "research", label: "Research set", counts: [2, 3, 3, 2], note: "10 questions · PIRLS mix 2·3·3·2 · formal runs" },
 };
@@ -666,19 +668,71 @@ textarea::placeholder { color: ${C.mute}; }
   );
 }
 
+/* small section label — sentence case in the UI face (v10.4 UI pass) */
 function Eyebrow({ children, color }) {
+  const text = typeof children === "string" ? children.charAt(0).toUpperCase() + children.slice(1) : children;
   return (
     <div
       style={{
-        fontFamily: F.mono,
-        fontSize: 11,
-        letterSpacing: "0.14em",
-        textTransform: "uppercase",
-        color: color || C.mute,
+        fontFamily: F.ui,
+        fontSize: 13,
+        fontWeight: 700,
+        letterSpacing: "0.01em",
+        color: color || C.slate,
       }}
     >
-      {children}
+      {text}
     </div>
+  );
+}
+
+/* where the reader is in the session: a real sequence, so it is numbered */
+const STEPS = [
+  { key: "read", label: "Read" },
+  { key: "answer", label: "Answer" },
+  { key: "write", label: "Write", note: "optional" },
+  { key: "results", label: "Results" },
+];
+function StepBar({ current, writeSkipped = false, className = "mt-6" }) {
+  return (
+    <nav aria-label="Session steps" className={className}>
+      <ol className="flex flex-wrap items-center gap-x-1.5 sm:gap-x-2 gap-y-2" style={{ listStyle: "none", padding: 0, margin: 0 }}>
+        {STEPS.map((st, i) => {
+          const done = current > i;
+          const now = current === i;
+          const skipped = st.key === "write" && writeSkipped && done;
+          return (
+            <li key={st.key} className="flex items-center gap-1.5 sm:gap-2" aria-current={now ? "step" : undefined}>
+              {i > 0 && <span aria-hidden="true" className="w-2 sm:w-5" style={{ height: 1.5, background: done || now ? C.teal : C.line }} />}
+              <span
+                className="flex items-center justify-center shrink-0"
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: 999,
+                  fontFamily: F.ui,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  background: now ? C.teal : done ? C.tealSoft : C.card,
+                  color: now ? C.card : done ? C.teal : C.mute,
+                  border: `1.5px solid ${now || done ? C.teal : C.line}`,
+                }}
+              >
+                {done && !skipped ? "✓" : i + 1}
+              </span>
+              <span style={{ fontFamily: F.ui, fontSize: 13, fontWeight: now ? 700 : 500, color: now ? C.ink : done ? C.teal : C.slate, whiteSpace: "nowrap" }}>
+                {st.label}
+                {(st.note || skipped) && (
+                  <span className={skipped ? "" : "hidden sm:inline"} style={{ fontWeight: 400, color: C.mute }}>
+                    {" "}({skipped ? "skipped" : st.note})
+                  </span>
+                )}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
   );
 }
 
@@ -717,10 +771,8 @@ function Climb({ counts, answered, current }) {
             <div
               className="mt-1.5 truncate"
               style={{
-                fontFamily: F.mono,
-                fontSize: 10,
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
+                fontFamily: F.ui,
+                fontSize: 12,
                 color: active ? C.ink : C.mute,
                 fontWeight: active ? 700 : 400,
               }}
@@ -832,15 +884,17 @@ function PassagePanel({ prompt, structure, compact, where, where2, focus, keywor
 
   return (
     <div style={{ background: C.card, border: `1px solid ${C.line}` }} className="rounded-sm overflow-hidden">
+      {prompt && prompt.trim() && (
       <div className="px-4 py-3" style={{ borderBottom: `1px solid ${C.line}`, background: C.amberSoft }}>
-        <Eyebrow color={C.slate}>You asked</Eyebrow>
+        <Eyebrow color={C.slate}>Why you're reading it</Eyebrow>
         <p className="mt-1" style={{ fontFamily: F.read, fontSize: 15, color: C.ink, lineHeight: 1.45 }}>
           {prompt ? (prompt.length > 260 ? prompt.slice(0, 260) + "…" : prompt) : "—"}
         </p>
       </div>
+      )}
       {hit && (
         <div className="px-4 py-2" style={{ borderBottom: `1px solid ${C.line}`, background: C.tealSoft }}>
-          <span style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.08em", textTransform: "uppercase", color: C.teal }}>
+          <span style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.teal }}>
             {(() => {
               const short = (h) => sectionLabel(h.section).split(" · ")[0];
               const places = [hit, hit2].filter((h) => h && h.section).sort((a, b) => a.section.n - b.section.n || a.para - b.para);
@@ -869,10 +923,8 @@ function PassagePanel({ prompt, structure, compact, where, where2, focus, keywor
               <div
                 className={secIdx === 0 ? "mb-1" : "mt-5 mb-1"}
                 style={{
-                  fontFamily: F.mono,
-                  fontSize: 10,
-                  letterSpacing: "0.12em",
-                  textTransform: "uppercase",
+                  fontFamily: F.ui,
+                  fontSize: 12,
                   color: inSection(i) ? C.teal : C.mute,
                   fontWeight: inSection(i) ? 700 : 400,
                 }}
@@ -895,10 +947,8 @@ function PassagePanel({ prompt, structure, compact, where, where2, focus, keywor
                   style={{
                     fontFamily: F.ui,
                     fontWeight: 700,
-                    fontSize: 12,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
-                    color: C.teal,
+                    fontSize: 15,
+                    color: C.ink,
                     borderLeft: sectionBand ? `3px solid ${C.teal}` : "3px solid transparent",
                     paddingLeft: 8,
                   }}
@@ -985,6 +1035,42 @@ function FlagExport({ style }) {
 
 /* "Clean up PDF text" — offered under the paste box; highlighted when the
    pasted text looks like it came out of a PDF. One-step undo. */
+/* Upload a .pdf / .docx / .txt; the text is read in the browser and goes into the box,
+   where the reader can check and fix it before starting */
+function FileLoad({ onLoaded }) {
+  const input = useRef(null);
+  const [state, setState] = useState({ busy: false, msg: "", bad: false });
+  const pick = async (file) => {
+    if (!file) return;
+    setState({ busy: true, msg: "Reading " + file.name + "…", bad: false });
+    try {
+      const r = await readTextFile(file);
+      onLoaded(r);
+      setState({ busy: false, msg: `Loaded ${r.words.toLocaleString()} words from ${file.name}. Check the text below before you start.`, bad: false });
+    } catch (e) {
+      setState({ busy: false, msg: e instanceof FileTextError ? e.message : "This file couldn't be read. Try another file, or paste the text.", bad: true });
+    }
+    if (input.current) input.current.value = "";
+  };
+  return (
+    <div className="text-right" style={{ maxWidth: "100%" }}>
+      <input ref={input} type="file" accept=".pdf,.docx,.txt,.md" className="sr-only" id="file-load" onChange={(e) => pick(e.target.files?.[0])} />
+      <label
+        htmlFor="file-load"
+        className="ql-focus inline-block px-3 py-1.5"
+        style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 600, color: C.teal, border: `1px solid ${C.teal}`, borderRadius: 2, cursor: state.busy ? "wait" : "pointer", background: C.card }}
+      >
+        {state.busy ? "Reading…" : "Upload a file"}
+      </label>
+      {state.msg && !state.busy && (
+        <p className="mt-1" role="status" style={{ fontFamily: F.ui, fontSize: 12, color: state.bad ? C.brick : C.slate, lineHeight: 1.45, textAlign: "left" }}>
+          {state.msg}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function CleanButton({ value, onChange }) {
   const [undo, setUndo] = useState(null);
   const [msg, setMsg] = useState("");
@@ -1121,22 +1207,23 @@ function Setup({ onStart, onResume }) {
 
   return (
     <div className="max-w-3xl mx-auto px-5 py-10 sm:py-16">
-      <Eyebrow>PIRLS 1–4 · PISA aspects</Eyebrow>
+      <p style={{ fontFamily: F.ui, fontSize: 14, fontWeight: 700, color: C.teal }}>AARC Reading Lab</p>
       <h1
         className="mt-3"
-        style={{ fontFamily: F.read, fontSize: 46, lineHeight: 1.05, color: C.ink, fontWeight: 600 }}
+        style={{ fontFamily: F.read, fontSize: "clamp(32px, 8vw, 46px)", lineHeight: 1.08, color: C.ink, fontWeight: 600, textWrap: "balance" }}
       >
-        Read it by answering it.
+        Read it yourself first. Then see what you understood.
       </h1>
       <p className="mt-3 max-w-xl" style={{ fontFamily: F.ui, fontSize: 16, color: C.slate, lineHeight: 1.6 }}>
-        Paste a conversation. You get a climb of questions that start with finding facts and end with
-        judging the answer — one question per screen, with the passage beside you.
+        Paste or upload a text you need to read. You read it on your own, then answer questions that
+        start with finding facts and end with judging the text, with the passage beside you.
       </p>
+      <StepBar current={-1} />
 
       <div className="mt-8 flex gap-1" role="tablist">
         {[
-          ["split", "Two boxes"],
-          ["whole", "Whole transcript"],
+          ["split", "A text"],
+          ["whole", "An AI chat transcript"],
         ].map(([k, label]) => (
           <button
             key={k}
@@ -1145,10 +1232,9 @@ function Setup({ onStart, onResume }) {
             onClick={() => setMode(k)}
             className="ql-focus px-3 py-2"
             style={{
-              fontFamily: F.mono,
-              fontSize: 11,
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
+              fontFamily: F.ui,
+              fontSize: 13,
+              fontWeight: 600,
               background: mode === k ? C.ink : "transparent",
               color: mode === k ? C.card : C.slate,
               border: `1px solid ${mode === k ? C.ink : C.line}`,
@@ -1165,26 +1251,32 @@ function Setup({ onStart, onResume }) {
           <>
             <div>
               <label style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.ink }}>
-                What you asked
+                Why you're reading it <span style={{ fontWeight: 400, color: C.slate }}>(optional)</span>
               </label>
               <textarea
                 className="ql-focus mt-2"
-                style={{ ...box, minHeight: 90 }}
+                style={{ ...box, minHeight: 70 }}
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Your prompt to the AI."
+                placeholder="A question you want answered, or what you need the text for. If the text is an AI reply, paste your prompt here."
               />
             </div>
             <div>
-              <label style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.ink }}>
-                What Claude replied
-              </label>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <label style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.ink }}>The text to read</label>
+                <FileLoad
+                  onLoaded={(r) => {
+                    setPassage(r.text);
+                    setMeta((m) => ({ ...m, title: m.title || r.title }));
+                  }}
+                />
+              </div>
               <textarea
                 className="ql-focus mt-2"
                 style={{ ...box, minHeight: 220 }}
                 value={passage}
                 onChange={(e) => setPassage(e.target.value)}
-                placeholder="The long reply you want to actually read — or text copied from a PDF."
+                placeholder="Paste the text here, or upload a PDF, Word (.docx) or text file."
               />
               <CleanButton value={passage} onChange={setPassage} />
             </div>
@@ -1419,9 +1511,9 @@ function HintLadder({ item, where, where2, steps, hintLevel, onHint, contextLine
 
   const render = (s, i) => {
     const tag = (
-      <span style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.08em", color: LOCATION_KINDS.includes(s.kind) ? C.brick : C.slate, marginRight: 8 }}>
-        HINT {i + 1}
-        {LOCATION_KINDS.includes(s.kind) ? " · STRONG HELP" : ""}
+      <span style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color: LOCATION_KINDS.includes(s.kind) ? C.brick : C.slate, marginRight: 8 }}>
+        Hint {i + 1}
+        {LOCATION_KINDS.includes(s.kind) ? " (strong help)" : ""}
       </span>
     );
     if (s.kind === "strategy") return <p style={row}>{tag}{STRATEGY[item.level] || STRATEGY[2]}</p>;
@@ -1469,11 +1561,9 @@ function HintLadder({ item, where, where2, steps, hintLevel, onHint, contextLine
                 <div className="flex items-baseline gap-2 flex-wrap">
                   <span
                     style={{
-                      fontFamily: F.mono,
-                      fontSize: 11,
+                      fontFamily: F.ui,
+                      fontSize: 12,
                       fontWeight: 700,
-                      letterSpacing: "0.08em",
-                      textTransform: "uppercase",
                       color: C.card,
                       background: BAND_COLOR[grade.band],
                       padding: "2px 8px",
@@ -1867,7 +1957,7 @@ function OpenQuestion({ q, passage, onDone, structure, onUpdate, onFocus }) {
         />
       )}
 
-      <div className="mt-5">{mark && small("YOUR FIRST ANSWER")}</div>
+      <div className="mt-5">{mark && small("Your first answer")}</div>
       {box(text, setText, () => onUpdate({ draft: text }), !!mark, "Your answer. Point at the passage where you can.")}
 
       {err && (
@@ -1924,7 +2014,7 @@ function OpenQuestion({ q, passage, onDone, structure, onUpdate, onFocus }) {
           {/* one revision attempt, before any better version is shown */}
           {!revisedDone ? (
             <div className="mt-6">
-              {small("TRY ONCE MORE")}
+              {small("Try once more")}
               <p className="mt-1" style={{ fontFamily: F.ui, fontSize: 13, color: C.slate, lineHeight: 1.5 }}>
                 Use the question above to improve your answer. Then you'll see your answer improved, and a strong answer to compare.
               </p>
@@ -1945,7 +2035,7 @@ function OpenQuestion({ q, passage, onDone, structure, onUpdate, onFocus }) {
             <div className="mt-6">
               {q.revision && (
                 <>
-                  {small("YOUR REVISION")}
+                  {small("Your revision")}
                   <p className="mt-1 px-4 py-3" style={{ fontFamily: F.ui, fontSize: 15, lineHeight: 1.6, color: C.ink, background: C.paper, borderRadius: 2, whiteSpace: "pre-wrap" }}>
                     {q.revision}
                   </p>
@@ -1972,7 +2062,7 @@ function ImprovedAnswer({ improved }) {
   return (
     <div className="mt-5">
       <p style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color: C.teal, letterSpacing: "0.04em" }}>
-        YOUR ANSWER, IMPROVED
+        Your answer, improved
       </p>
       <p className="mt-1" style={{ fontFamily: F.ui, fontSize: 12, color: C.slate }}>
         Your words are kept. <span style={{ background: C.amberSoft, padding: "0 3px" }}>Highlighted</span> parts were added or changed
@@ -2002,7 +2092,7 @@ function ImprovedAnswer({ improved }) {
       {improved.strong && (
         <>
           <p className="mt-5" style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color: C.slate, letterSpacing: "0.04em" }}>
-            A STRONG ANSWER, FOR COMPARISON
+            A strong answer, for comparison
           </p>
           <p className="mt-1 px-4 py-3" style={{ fontFamily: F.read, fontSize: 16, lineHeight: 1.6, color: C.ink, background: C.paper, borderRadius: 2 }}>
             {improved.strong}
@@ -2096,7 +2186,7 @@ function Review({ byLevel, answers, onRestart, onRetry, rejected = [], shortfall
       )}
       {selfRating.after_questions != null && (
         <div className="mt-4 px-4 py-3" style={{ background: C.tealSoft, borderRadius: 2 }}>
-          <p style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.teal }}>How well you thought you understood</p>
+          <p style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.teal }}>How well you thought you understood</p>
           <p className="mt-1" style={{ fontFamily: F.ui, fontSize: 15, color: C.ink, lineHeight: 1.6 }}>
             {selfRating.after_reading != null && (
               <>
@@ -2239,7 +2329,7 @@ function WrittenReview({ q, onOpen }) {
       </p>
       {answer ? (
         <>
-          {lab(q.mark ? "YOUR FIRST ANSWER · " + String(q.mark.verdict || "").toUpperCase() : "YOUR DRAFT (not submitted)")}
+          {lab(q.mark ? "Your first answer · " + String(q.mark.verdict || "") : "Your draft (not submitted)")}
           {body(answer)}
         </>
       ) : (
@@ -2247,7 +2337,7 @@ function WrittenReview({ q, onOpen }) {
       )}
       {q.revision && (
         <>
-          {lab("YOUR REVISION")}
+          {lab("Your revision")}
           {body(q.revision)}
         </>
       )}
@@ -3083,63 +3173,31 @@ export default function App() {
         <WordCard word={lookup.word} sentence={lookup.sentence} onClose={() => setLookup(null)} />
       )}
 
-      <button
-        onClick={() => setShowNotes(true)}
-        className="ql-focus fixed z-40 px-3 py-2"
-        style={{
-          top: 12,
-          right: 156,
-          background: C.card,
-          border: `1px solid ${C.line}`,
-          borderRadius: 2,
-          fontFamily: F.mono,
-          fontSize: 10,
-          letterSpacing: "0.1em",
-          textTransform: "uppercase",
-          color: C.slate,
-        }}
-      >
-        Notes
-      </button>
+      {/* tools, always reachable: one group, top right */}
+      <div className="fixed z-40 flex gap-2" style={{ top: 12, right: 12 }}>
+        {[
+          ["Notes", () => setShowNotes(true)],
+          ["Words", () => setShowVocab(true)],
+          ["Model", () => setShowSettings(true)],
+        ].map(([label, fn]) => (
+          <button
+            key={label}
+            onClick={fn}
+            className="ql-focus px-3 py-1.5"
+            style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 2, fontFamily: F.ui, fontSize: 13, fontWeight: 600, color: C.slate }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
-      <button
-        onClick={() => setShowVocab(true)}
-        className="ql-focus fixed z-40 px-3 py-2"
-        style={{
-          top: 12,
-          right: 84,
-          background: C.card,
-          border: `1px solid ${C.line}`,
-          borderRadius: 2,
-          fontFamily: F.mono,
-          fontSize: 10,
-          letterSpacing: "0.1em",
-          textTransform: "uppercase",
-          color: C.slate,
-        }}
-      >
-        Words
-      </button>
-
-      <button
-        onClick={() => setShowSettings(true)}
-        className="ql-focus fixed z-40 px-3 py-2"
-        style={{
-          top: 12,
-          right: 12,
-          background: C.card,
-          border: `1px solid ${C.line}`,
-          borderRadius: 2,
-          fontFamily: F.mono,
-          fontSize: 10,
-          letterSpacing: "0.1em",
-          textTransform: "uppercase",
-          color: C.slate,
-        }}
-      >
-        Model
-      </button>
-
+      {screen !== "setup" && (
+        /* leaves room for the tool buttons: above them on phones, beside them on wider screens */
+        <div className="max-w-6xl mx-auto px-5 pt-14 sm:pt-3 sm:pr-64 pb-1 flex flex-wrap items-center gap-x-6 gap-y-1">
+          <span style={{ fontFamily: F.ui, fontSize: 14, fontWeight: 700, color: C.teal }}>AARC Reading Lab</span>
+          <StepBar className="" current={{ focus: 0, session: 1, open: 2, review: 3 }[screen] ?? 1} writeSkipped={!!openQ?.skipped} />
+        </div>
+      )}
       {screen === "setup" && <Setup onStart={start} onResume={resume} />}
       {screen === "focus" && (
         <FocusReading
@@ -3168,26 +3226,20 @@ export default function App() {
                 }}
                 title="Saves this passage, then lets you start another"
                 className="ql-focus shrink-0 pb-1 text-left"
-                style={{
-                  fontFamily: F.mono,
-                  fontSize: 10,
-                  letterSpacing: "0.06em",
-                  color: C.slate,
-                  lineHeight: 1.4,
-                }}
+                style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 600, color: C.slate, lineHeight: 1.35 }}
               >
-                <span style={{ textTransform: "uppercase" }}>← Save &amp; new</span>
+                <span>Save and start</span>
                 <br />
-                <span style={{ color: C.mute }}>passage</span>
+                <span style={{ color: C.mute, fontWeight: 400 }}>a new text</span>
               </button>
               <Climb counts={counts} answered={answered} current={screen === "open" ? 4 : slot?.level} />
               <button
                 onClick={persistNow}
                 className="ql-focus shrink-0 pb-1 text-right"
                 title="Your progress saves by itself; this forces it now"
-                style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.06em", color: C.slate, lineHeight: 1.4 }}
+                style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 600, color: C.slate, lineHeight: 1.35 }}
               >
-                <span style={{ textTransform: "uppercase" }}>Save</span>
+                <span>Saved</span>
                 <br />
                 <span style={{ color: C.mute }}>{savedAt ? formatWhen(savedAt).split(" · ")[1] : "—"}</span>
               </button>

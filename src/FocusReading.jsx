@@ -155,7 +155,7 @@ function TutorSheet({ hl, thread, busy, err, onSend, onRetry, onClose }) {
       <div className="max-w-2xl w-full mx-auto flex flex-col" style={{ minHeight: 0, flex: 1 }}>
         <div className="px-4 pt-3 pb-2 flex items-start gap-3" style={{ borderBottom: `1px solid ${C.line}` }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: C.teal }}>
+            <div style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.teal }}>
               Tutor · explains only what you've read so far
             </div>
             <p className="mt-1" style={{ fontFamily: F.read, fontSize: 14, color: C.slate, lineHeight: 1.4 }}>
@@ -482,7 +482,7 @@ export default function FocusReading({ passage, structure, title, plan, learner,
         className="sticky z-30 -mx-4 sm:-mx-6 px-4 sm:px-6 pb-3 pt-16 xl:pt-3 flex flex-wrap items-center gap-x-5 gap-y-2"
         style={{ top: "env(safe-area-inset-top, 0px)", background: C.paper, borderBottom: `1px solid ${C.line}` }}
       >
-        <div style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.teal }}>Focus reading</div>
+        <div style={{ fontFamily: F.ui, fontSize: 14, fontWeight: 700, color: C.teal }}>Focus reading</div>
         <div style={{ fontFamily: F.mono, fontSize: 18, color: C.ink, fontVariantNumeric: "tabular-nums" }} aria-label="Reading time">
           {clock(activeMs)}
         </div>
@@ -567,7 +567,7 @@ export default function FocusReading({ passage, structure, title, plan, learner,
           return (
             <div key={i}>
               {sec && (
-                <div className={sec.n === 1 ? "mb-2" : "mt-6 mb-2"} style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.mute }}>
+                <div className={sec.n === 1 ? "mb-2" : "mt-6 mb-2"} style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.mute }}>
                   Section {sec.n}
                 </div>
               )}
@@ -602,7 +602,7 @@ export default function FocusReading({ passage, structure, title, plan, learner,
 
       {highlights.length > 0 && (
         <section className="mt-6">
-          <div style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.slate }}>Your highlights</div>
+          <div style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.slate }}>Your highlights</div>
           <ul className="mt-2 space-y-2">
             {highlights.map((h) => (
               <li key={h.id} className="px-3 py-2 flex flex-wrap items-center gap-2" style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 2 }}>

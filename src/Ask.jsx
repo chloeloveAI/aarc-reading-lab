@@ -130,7 +130,7 @@ export function AskPanel({ selection, passage, prompt, intent, currentStem, onCl
           <div>
             {coach && (
               <div className="mb-3">
-                <span style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.brick }}>Question coach</span>
+                <span style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.brick }}>Question coach</span>
                 <p className="mt-1" style={{ fontFamily: F.ui, fontSize: 13, color: C.slate, lineHeight: 1.5 }}>
                   {answered
                     ? "You've answered this question, so the coach can now explain fully."
@@ -138,7 +138,7 @@ export function AskPanel({ selection, passage, prompt, intent, currentStem, onCl
                 </p>
               </div>
             )}
-            <span style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.mute }}>
+            <span style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.mute }}>
               {aboutQuestion ? "The question" : "You selected"}
             </span>
             <p className="mt-1" style={{ fontFamily: F.read, fontSize: 17, lineHeight: 1.5, color: C.ink }}>
@@ -153,7 +153,7 @@ export function AskPanel({ selection, passage, prompt, intent, currentStem, onCl
         <div className="px-6 py-5 space-y-4" style={{ maxHeight: "58vh", overflowY: "auto" }}>
           {probes.length > 0 && thread.length === 0 && (
             <div>
-              <span style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.teal }}>
+              <span style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.teal }}>
                 {coach ? "You could ask" : "Worth asking"}
               </span>
               <div className="mt-2 space-y-2">
