@@ -1,4 +1,10 @@
-# Question Ladder — local setup
+# AARC Reading Lab (Question Ladder) — local setup
+
+> **Paper supplement.** This repository is the supplementary material for
+> *Regulating AI Assistance in Reading: Two Formative Design Iterations of AARC Reading Lab*
+> (AIESC 2027 submission). Start with [`supplementary/README.md`](supplementary/README.md),
+> which maps the paper's rules, prompts, hint ladders and coding matrix to the files here.
+> Tags: `v10.3-iteration1` (Iteration 1) and `v10.4-iteration2` (Iteration 2).
 
 Runs on your desktop. Writes its questions with whatever model you point it at:
 your local Gemma 4, any OpenAI-compatible endpoint, or Claude with your own key.
