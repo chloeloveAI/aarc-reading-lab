@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { askAboutSelection, probeQuestions, addNote, listNotes, removeNote } from "./notes";
 import { formatWhen, relativeWhen } from "./sessions";
+import { coachTurn } from "./coach";
 
 const C = {
   ink: "#16202B",
@@ -51,7 +52,9 @@ export function SelectionBar({ selection, onAsk, onNote, onClear }) {
   );
 }
 
-export function AskPanel({ selection, passage, prompt, intent, currentStem, onClose }) {
+/* item given → "question coach" (while answering); otherwise the general ask panel */
+export function AskPanel({ selection, passage, prompt, intent, currentStem, onClose, item, answered, choice = null, aboutQuestion = false, learner, onUse }) {
+  const coach = !!item;
   const [probes, setProbes] = useState([]);
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
@@ -61,6 +64,22 @@ export function AskPanel({ selection, passage, prompt, intent, currentStem, onCl
 
   useEffect(() => {
     let dead = false;
+    if (coach) {
+      /* no model-made "worth asking" list here: it could lead straight to the answer */
+      const L = "ABCDEF";
+      const key = (item?.options || []).findIndex((o) => o.correct);
+      const wrong = answered && choice != null && item?.options?.[choice] && !item.options[choice].correct;
+      setProbes(
+        answered
+          ? wrong
+            ? [`Why is my answer (${L[choice]}) wrong?`, `Why is ${L[key]} right?`, aboutQuestion ? "What was the question asking?" : "What does this part mean?"]
+            : [`Why is ${L[key]} right?`, "Why are the other options wrong?", aboutQuestion ? "What was the question asking?" : "What does this part mean?"]
+          : aboutQuestion
+          ? ["What is this question asking me?", "What kind of answer does it want?", "What does a word in the question mean?"]
+          : ["What does this word or phrase mean?", "Who or what is this about?", "I don't understand this sentence."]
+      );
+      return;
+    }
     probeQuestions({ selection, passage, prompt, intent })
       .then((p) => !dead && setProbes(p))
       .catch(() => {});
@@ -74,8 +93,11 @@ export function AskPanel({ selection, passage, prompt, intent, currentStem, onCl
     setBusy(true);
     setErr("");
     try {
-      const r = await askAboutSelection({ selection, question, passage, prompt, intent, currentStem });
+      const r = coach
+        ? await coachTurn({ selection, question, passage, item, answered, choice, aboutQuestion, learner, history: thread })
+        : await askAboutSelection({ selection, question, passage, prompt, intent, currentStem });
       setThread((t) => [...t, { question, ...r }]);
+      if (coach && onUse) onUse({ selection, question, reply: r.answer, kind: r.kind, leak: r.leak || "", retried: !!r.retried, answered: !!answered, about: aboutQuestion ? "question" : "text", at: new Date().toISOString() });
       setQ("");
     } catch (e) {
       setErr(e.message);
@@ -101,13 +123,23 @@ export function AskPanel({ selection, passage, prompt, intent, currentStem, onCl
     >
       <div
         className="w-full max-w-2xl"
-        style={{ background: C.paper, border: `1px solid ${C.line}`, borderRadius: 2 }}
+        style={{ background: C.paper, border: `1px solid ${C.line}`, borderTop: coach ? `3px solid ${C.amber}` : `1px solid ${C.line}`, borderRadius: 2 }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-6 py-5 flex items-start justify-between gap-4" style={{ borderBottom: `1px solid ${C.line}` }}>
           <div>
-            <span style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.mute }}>
-              You selected
+            {coach && (
+              <div className="mb-3">
+                <span style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.brick }}>Question coach</span>
+                <p className="mt-1" style={{ fontFamily: F.ui, fontSize: 13, color: C.slate, lineHeight: 1.5 }}>
+                  {answered
+                    ? "You've answered this question, so the coach can now explain fully."
+                    : "Answers facts and word meanings. For harder questions it asks you a question back. It won't give the answer or tell you where to look. Using it counts as help on this question."}
+                </p>
+              </div>
+            )}
+            <span style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.mute }}>
+              {aboutQuestion ? "The question" : "You selected"}
             </span>
             <p className="mt-1" style={{ fontFamily: F.read, fontSize: 17, lineHeight: 1.5, color: C.ink }}>
               “{selection}”
@@ -121,8 +153,8 @@ export function AskPanel({ selection, passage, prompt, intent, currentStem, onCl
         <div className="px-6 py-5 space-y-4" style={{ maxHeight: "58vh", overflowY: "auto" }}>
           {probes.length > 0 && thread.length === 0 && (
             <div>
-              <span style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.teal }}>
-                Worth asking
+              <span style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.teal }}>
+                {coach ? "You could ask" : "Worth asking"}
               </span>
               <div className="mt-2 space-y-2">
                 {probes.map((p, i) => (
@@ -215,7 +247,7 @@ export function AskPanel({ selection, passage, prompt, intent, currentStem, onCl
           </button>
           {currentStem && (
             <span className="ml-3" style={{ fontFamily: F.ui, fontSize: 11, color: C.mute }}>
-              It won't answer the question you're on.
+              {coach && !answered ? "Counts as help on this question." : coach ? "You've answered, so it can explain fully." : "It won't answer the question you're on."}
             </span>
           )}
         </div>

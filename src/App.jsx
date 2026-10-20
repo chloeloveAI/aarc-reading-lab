@@ -35,7 +35,18 @@ import {
   logSummary,
   exportLogJSON,
   exportCandidatesCSV,
+  exportReadingCSV,
+  exportWrittenCSV,
+  logReading,
+  logWritten,
+  logSelfRating,
+  exportRatingsCSV,
 } from "./research";
+import FocusReading from "./FocusReading";
+import { readTextFile, FileTextError } from "./fileText";
+import SelfRating, { RATING_VERSION } from "./SelfRating";
+import { checkPremise, markAnswer, improveAnswer, strongAnswer, WRITTEN_VERSION } from "./written";
+import { quarterMap, normLine, passageWithQuarters, buildBlueprint, blueprintSummary, COVERAGE_VERSION, stemLocationProblem, keyPlan, placeKey, evidenceSpans } from "./coverage";
 import { loadFlags, exportFlagsCSV, exportFlagsJSON, agreement } from "./flags";
 import {
   complete,
@@ -52,7 +63,8 @@ import {
 } from "./llm";
 
 /* ------------------------------------------------------------------ *
- * Question Ladder — turn a long AI answer into a climb of comprehension
+ * AARC Reading Lab (formerly Question Ladder) — read a text on your own first, then
+ * climb PIRLS-laddered questions about it
  * items, one screen at a time. PIRLS processes 1–4, PISA aspects.
  * ------------------------------------------------------------------ */
 
@@ -117,8 +129,8 @@ const LEVELS = [
 
 /* counts = questions per comprehension process 1–4 */
 const PLANS = {
-  short: { key: "short", label: "Quick practice", counts: [1, 2, 2, 1], note: "6 questions (1·2·2·1) + 1 written" },
-  full: { key: "full", label: "Full practice", counts: [2, 3, 3, 2], note: "10 questions (2·3·3·2) + 1 written" },
+  short: { key: "short", label: "Quick practice", counts: [1, 2, 2, 1], note: "6 questions (1·2·2·1) + 1 written, optional" },
+  full: { key: "full", label: "Full practice", counts: [2, 3, 3, 2], note: "10 questions (2·3·3·2) + 1 written, optional" },
   /* the formal experiment: PIRLS 2026 weighting 20/30/30/20 % (p. 8) */
   research: { key: "research", label: "Research set", counts: [2, 3, 3, 2], note: "10 questions · PIRLS mix 2·3·3·2 · formal runs" },
 };
@@ -138,7 +150,7 @@ function trimPassage(text) {
 
 /* The item-generation prompt lives in prompts.js (versioned: PROMPT_VERSION). */
 
-function buildOpenPrompt(prompt, passage) {
+function buildOpenPrompt(prompt, passage, problems = []) {
   return `Write ONE open-ended written-response question about the passage below, at PIRLS process 4 (evaluate and critique) / PISA "evaluate and reflect".
 
 <question>
@@ -150,6 +162,9 @@ ${trimPassage(passage)}
 </passage>
 
 The question must require the learner to take a position and defend it with evidence from the passage — for example weighing a trade-off the passage leaves implicit, judging where the advice would break down, or deciding what she would do differently and why. It must not be answerable with recall.
+Only name things the passage actually contains, in the role the passage gives them: do not call a problem a "framework", do not invent a finding, contradiction or link the passage does not support.${
+    problems.length ? `\n\nAn earlier version of this question was rejected because:\n- ${problems.join("\n- ")}\nWrite a different question that avoids these problems.` : ""
+  }
 
 Return ONLY JSON:
 {"stem":"...","criteria":["...","...","..."]}
@@ -335,6 +350,20 @@ function findAnchor(lines, anchor) {
     const idx = norm(lines[i]).indexOf(a);
     if (idx > -1) return { line: i, exact: true, needle: a };
   }
+  /* v10.4: a span shortened with "..." or "…" — every piece, in order, in one line */
+  const pieces = a.split(/\s*(?:\.\.\.|\u2026)\s*/).map((x) => x.trim()).filter((x) => x.length >= 3);
+  if (pieces.length > 1)
+    for (let i = 0; i < lines.length; i++) {
+      const nl = norm(lines[i]);
+      let from = 0;
+      const ok = pieces.every((pc) => {
+        const k = nl.indexOf(pc, from);
+        if (k === -1) return false;
+        from = k + pc.length;
+        return true;
+      });
+      if (ok) return { line: i, exact: true, needle: pieces[0], pieces, ellipsis: true };
+    }
   const words = a.split(" ").filter((w) => w.length > 4);
   if (words.length < 2) return null;
   let best = { line: -1, score: 0 };
@@ -508,6 +537,27 @@ function checkItem(item, structure, { l3Strict = true } = {}) {
   checks.anchor_found = !!a;
   if (!a) reasons.push(item.anchor ? "Evidence span not found in the passage" : "No evidence span given");
 
+  /* v10.4: planning labels ("Q2", "quarter 3") must never reach the reader, in any field */
+  const QLABEL = /\bQ[1-4]\b|\bquarters?\s*[1-4]\b|\bquarter (one|two|three|four)\b/i;
+  const shown = [item.stem, item.link, item.hint, item.guide, item.takeaway, item.keyword_meaning, ...(item.options || []).flatMap((o) => [o.text, o.why])];
+  checks.no_planning_labels = !shown.some((t) => QLABEL.test(String(t || "")));
+  if (!checks.no_planning_labels) reasons.push("Mentions a quarter label (Q1–Q4), which is for planning only");
+
+  /* v10.4: if the stem names a section ("the final section", "Section 3"), the evidence must be there */
+  checks.location_consistent = null;
+  if (a && a.section) {
+    const sections = structure.sections || [];
+    const problem = stemLocationProblem(item.stem, a.section.n, sections.length);
+    checks.location_consistent = !problem;
+    if (problem) {
+      /* for process 3 the named section may hold the second span instead */
+      const b2 = item.anchor2 ? locate(structure, item.anchor2) : null;
+      const ok2 = b2?.section && !stemLocationProblem(item.stem, b2.section.n, sections.length);
+      if (ok2) checks.location_consistent = true;
+      else reasons.push(problem);
+    }
+  }
+
   /* processes 2–4: the answer must not simply be printed in one sentence */
   checks.not_copied = null;
   if (item.level >= 2) {
@@ -560,18 +610,30 @@ function checkItem(item, structure, { l3Strict = true } = {}) {
   };
 }
 
+/* v10.4 hint ladder: help with THINKING first, location only as a last resort.
+   A location hint turns reading into search, so it comes last, names the
+   section(s) only (both for process 3), and is labelled strong help.
+   The exact sentence is never shown before answering; after answering it is
+   shown as feedback. */
+const STRATEGY = {
+  1: "The answer is stated in the text. First decide what kind of detail the question wants: a number, a name, a place, a time or a reason. Then look for that kind of detail.",
+  2: "The answer is not stated in one place. What do the nearby sentences suggest when you put them together?",
+  3: "This question joins ideas from two different parts of the text. Which two ideas does it ask you to connect, and how are they related?",
+  4: "This question asks you to judge the text, not just find something in it. Think about how strong the evidence is, what is missing, or why the writer chose these words.",
+};
 function hintSteps(item, where, where2) {
-  const steps = [];
+  /* strategy → guiding question → where to look (strong help) → key word.
+     The key word comes last: it is taken from the evidence sentence, so it
+     can't be answered without knowing where it is, and searching for it
+     would lead straight to the evidence. */
+  const steps = [{ kind: "strategy" }];
+  if (item.guide) steps.push({ kind: "guide" });
   if (where?.section) steps.push({ kind: "section" });
   else if (item.hint) steps.push({ kind: "locator" });
-  /* a paragraph step only narrows anything if the section has more than one */
-  if (where?.para && (where.section?.paras || 0) > 1) steps.push({ kind: "paragraph" });
-  if (item.level === 3 && where2) steps.push({ kind: "second" });
   if (item.keyword) steps.push({ kind: "keyword" });
-  if (item.guide) steps.push({ kind: "guide" });
-  if (where) steps.push({ kind: "evidence" });
   return steps;
 }
+const LOCATION_KINDS = ["section", "locator", "paragraph", "evidence"];
 
 function splitTranscript(text) {
   const lines = text.split("\n");
@@ -599,26 +661,78 @@ function Fonts() {
 @import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600&family=Public+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;700&display=swap');
 .ql-focus:focus-visible { outline: 2px solid ${C.teal}; outline-offset: 2px; }
 .ql-bubble { transition: transform .18s ease, background-color .18s ease, border-color .18s ease; }
-.ql-opt:hover .ql-bubble { transform: scale(1.08); }
-@media (prefers-reduced-motion: reduce) { .ql-bubble { transition: none; } .ql-opt:hover .ql-bubble { transform: none; } }
+.ql-choose:not(:disabled):hover .ql-bubble { transform: scale(1.1); background: #16202b; color: #fff; }
+@media (prefers-reduced-motion: reduce) { .ql-bubble { transition: none; } .ql-choose:hover .ql-bubble { transform: none; } }
 textarea::placeholder { color: ${C.mute}; }
 `}</style>
   );
 }
 
+/* small section label — sentence case in the UI face (v10.4 UI pass) */
 function Eyebrow({ children, color }) {
+  const text = typeof children === "string" ? children.charAt(0).toUpperCase() + children.slice(1) : children;
   return (
     <div
       style={{
-        fontFamily: F.mono,
-        fontSize: 11,
-        letterSpacing: "0.14em",
-        textTransform: "uppercase",
-        color: color || C.mute,
+        fontFamily: F.ui,
+        fontSize: 13,
+        fontWeight: 700,
+        letterSpacing: "0.01em",
+        color: color || C.slate,
       }}
     >
-      {children}
+      {text}
     </div>
+  );
+}
+
+/* where the reader is in the session: a real sequence, so it is numbered */
+const STEPS = [
+  { key: "read", label: "Read" },
+  { key: "answer", label: "Answer" },
+  { key: "write", label: "Write", note: "optional" },
+  { key: "results", label: "Results" },
+];
+function StepBar({ current, writeSkipped = false, className = "mt-6" }) {
+  return (
+    <nav aria-label="Session steps" className={className}>
+      <ol className="flex flex-wrap items-center gap-x-1.5 sm:gap-x-2 gap-y-2" style={{ listStyle: "none", padding: 0, margin: 0 }}>
+        {STEPS.map((st, i) => {
+          const done = current > i;
+          const now = current === i;
+          const skipped = st.key === "write" && writeSkipped && done;
+          return (
+            <li key={st.key} className="flex items-center gap-1.5 sm:gap-2" aria-current={now ? "step" : undefined}>
+              {i > 0 && <span aria-hidden="true" className="w-2 sm:w-5" style={{ height: 1.5, background: done || now ? C.teal : C.line }} />}
+              <span
+                className="flex items-center justify-center shrink-0"
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: 999,
+                  fontFamily: F.ui,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  background: now ? C.teal : done ? C.tealSoft : C.card,
+                  color: now ? C.card : done ? C.teal : C.mute,
+                  border: `1.5px solid ${now || done ? C.teal : C.line}`,
+                }}
+              >
+                {done && !skipped ? "✓" : i + 1}
+              </span>
+              <span style={{ fontFamily: F.ui, fontSize: 13, fontWeight: now ? 700 : 500, color: now ? C.ink : done ? C.teal : C.slate, whiteSpace: "nowrap" }}>
+                {st.label}
+                {(st.note || skipped) && (
+                  <span className={skipped ? "" : "hidden sm:inline"} style={{ fontWeight: 400, color: C.mute }}>
+                    {" "}({skipped ? "skipped" : st.note})
+                  </span>
+                )}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
   );
 }
 
@@ -657,10 +771,8 @@ function Climb({ counts, answered, current }) {
             <div
               className="mt-1.5 truncate"
               style={{
-                fontFamily: F.mono,
-                fontSize: 10,
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
+                fontFamily: F.ui,
+                fontSize: 12,
                 color: active ? C.ink : C.mute,
                 fontWeight: active ? 700 : 400,
               }}
@@ -677,14 +789,44 @@ function Climb({ counts, answered, current }) {
 
 /* focus: "none" | "section" | "paragraph" | "sentence" — how much of the
    evidence location the learner has earned so far. */
-function PassagePanel({ prompt, structure, compact, where, focus, onWord, onSelect }) {
+/* where a key word sits in a line: case-insensitive, flexible spaces, any ending ("log" → "logs") */
+function keywordSpans(line, kw) {
+  const words = String(kw || "").replace(/["“”‘’]/g, "").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const esc = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp("\\b" + words.map(esc).join("[\\s-]+") + "[\\w'-]*", "gi");
+  const out = [];
+  let m;
+  while ((m = re.exec(line))) {
+    out.push({ from: m.index, to: m.index + m[0].length });
+    if (!m[0]) re.lastIndex++;
+  }
+  return out;
+}
+
+function PassagePanel({ prompt, structure, compact, where, where2, focus, keyword = "", onWord, onSelect }) {
   const { lines, heading, sectionOf, paraOf, sections } = structure;
   const hit = focus === "none" || !where ? null : where;
+  /* v10.4: process 3 — the second place is shown at every step, like the first */
+  const hit2 = hit && where2 ? where2 : null;
   const box = useRef(null);
   const lineEls = useRef({});
 
-  const inSection = (i) => hit && hit.section && sectionOf[i] === hit.section.n - 1;
-  const inPara = (i) => inSection(i) && hit.para && paraOf[i] === hit.para;
+  /* key-word hint (the last step): mark the word where the evidence is.
+     Evidence line(s) first; if the word is not there, its place in the section. */
+  const kwLines = useMemo(() => {
+    if (!keyword || !hit || focus === "sentence") return new Set();
+    const strip = (l) => l.replace(/\*\*/g, "");
+    const ev = [hit, hit2].filter(Boolean).map((h) => h.line).filter((i) => keywordSpans(strip(lines[i]), keyword).length);
+    if (ev.length) return new Set(ev);
+    const secs = new Set([hit, hit2].filter((h) => h && h.section).map((h) => h.section.n - 1));
+    return new Set(lines.map((_, i) => i).filter((i) => secs.has(sectionOf[i]) && keywordSpans(strip(lines[i]), keyword).length));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyword, hit?.line, hit2?.line, focus, lines]);
+
+  const inSec1 = (h, i) => h && h.section && sectionOf[i] === h.section.n - 1;
+  const inSection = (i) => inSec1(hit, i) || inSec1(hit2, i);
+  const inPara = (i) => (inSec1(hit, i) && hit.para && paraOf[i] === hit.para) || (inSec1(hit2, i) && hit2.para && paraOf[i] === hit2.para);
 
   /* bring the earned location into view — the section start, the paragraph, or the evidence line */
   useEffect(() => {
@@ -692,47 +834,75 @@ function PassagePanel({ prompt, structure, compact, where, focus, onWord, onSele
     let target = hit.line;
     if (focus === "section" && hit.section) target = hit.section.start;
     if (focus === "paragraph" && hit.para) target = lines.findIndex((_, i) => inPara(i));
+    if (kwLines.size) target = Math.min(...kwLines);
     const el = lineEls.current[target];
     if (el) box.current.scrollTo({ top: Math.max(0, el.offsetTop - 16), behavior: "smooth" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, hit?.line, hit?.section?.n, hit?.para]);
+  }, [focus, hit?.line, hit?.section?.n, hit?.para, kwLines]);
 
   const renderLine = (line, i) => {
-    /* exact hit → highlight just the span; fuzzy → tint the line */
-    if (hit && hit.line === i && focus === "sentence" && hit.exact) {
-      const idx = norm(line).indexOf(hit.needle);
-      const pre = line.slice(0, idx);
-      const mid = line.slice(idx, idx + hit.needle.length);
-      const post = line.slice(idx + hit.needle.length);
-      return (
-        <>
-          <Words text={pre} onWord={onWord} />
-          <mark style={{ background: C.amber, padding: "1px 2px", borderRadius: 2 }}>
-            <Words text={mid} onWord={onWord} />
+    /* v10.4: evidence is marked at SENTENCE level — the 1–3 sentences that
+       hold it, in bold — never the whole paragraph */
+    const spans = focus === "sentence" ? evidenceSpans(line, [hit, hit2].filter((h) => h && h.line === i)) : [];
+    let kws = !spans.length && kwLines.has(i) ? keywordSpans(line, keyword) : [];
+    /* on an evidence line, only the word inside the evidence sentence(s) */
+    const evHere = kws.length ? evidenceSpans(line, [hit, hit2].filter((h) => h && h.line === i)) : [];
+    const inEv = kws.filter((m) => evHere.some((e) => m.from >= e.from && m.to <= e.to));
+    if (inEv.length) kws = inEv;
+    if (kws.length) {
+      const parts = [];
+      let pos = 0;
+      kws.forEach((m, k) => {
+        if (m.from > pos) parts.push(<Words key={"t" + k} text={line.slice(pos, m.from)} onWord={onWord} />);
+        parts.push(
+          <mark key={"k" + k} data-keyword="1" style={{ background: C.amber, color: C.ink, fontWeight: 700, padding: "1px 3px", borderRadius: 2 }}>
+            <Words text={line.slice(m.from, m.to)} onWord={onWord} />
           </mark>
-          <Words text={post} onWord={onWord} />
-        </>
-      );
+        );
+        pos = m.to;
+      });
+      parts.push(<Words key="end" text={line.slice(pos)} onWord={onWord} />);
+      return <>{parts}</>;
+    }
+    if (spans.length) {
+      const parts = [];
+      let pos = 0;
+      spans.forEach((m, k) => {
+        if (m.from > pos) parts.push(<Words key={"t" + k} text={line.slice(pos, m.from)} onWord={onWord} />);
+        parts.push(
+          <mark key={"m" + k} data-evidence="1" style={{ background: C.amberSoft, color: C.ink, fontWeight: 700, padding: "1px 2px", borderRadius: 2, boxShadow: `inset 0 -2px 0 ${C.amber}` }}>
+            <Words text={line.slice(m.from, m.to)} onWord={onWord} />
+          </mark>
+        );
+        pos = m.to;
+      });
+      parts.push(<Words key="end" text={line.slice(pos)} onWord={onWord} />);
+      return <>{parts}</>;
     }
     return <Words text={line} onWord={onWord} />;
   };
 
   return (
     <div style={{ background: C.card, border: `1px solid ${C.line}` }} className="rounded-sm overflow-hidden">
+      {prompt && prompt.trim() && (
       <div className="px-4 py-3" style={{ borderBottom: `1px solid ${C.line}`, background: C.amberSoft }}>
-        <Eyebrow color={C.slate}>You asked</Eyebrow>
+        <Eyebrow color={C.slate}>Why you're reading it</Eyebrow>
         <p className="mt-1" style={{ fontFamily: F.read, fontSize: 15, color: C.ink, lineHeight: 1.45 }}>
           {prompt ? (prompt.length > 260 ? prompt.slice(0, 260) + "…" : prompt) : "—"}
         </p>
       </div>
+      )}
       {hit && (
         <div className="px-4 py-2" style={{ borderBottom: `1px solid ${C.line}`, background: C.tealSoft }}>
-          <span style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.08em", textTransform: "uppercase", color: C.teal }}>
-            {focus === "sentence"
-              ? "Evidence marked"
-              : focus === "paragraph"
-              ? "Narrowed to " + sectionLabel(hit.section).split(" · ")[0] + ", paragraph " + hit.para
-              : "Narrowed to " + sectionLabel(hit.section)}
+          <span style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.teal }}>
+            {(() => {
+              const short = (h) => sectionLabel(h.section).split(" · ")[0];
+              const places = [hit, hit2].filter((h) => h && h.section).sort((a, b) => a.section.n - b.section.n || a.para - b.para);
+              if (focus === "sentence") return places.length > 1 ? "Both pieces of evidence marked" : "Evidence marked";
+              if (focus === "paragraph") return "Narrowed to " + places.map((h) => short(h) + ", paragraph " + (h.para || 1)).join(" and ");
+              const secs = [...new Set(places.map((h) => sectionLabel(h.section)))];
+              return "Narrowed to " + secs.join(" and ") + (kwLines.size ? " · key word marked" : "");
+            })()}
           </span>
         </div>
       )}
@@ -741,7 +911,7 @@ function PassagePanel({ prompt, structure, compact, where, focus, onWord, onSele
         className="px-4 py-4 overflow-y-auto"
         onMouseUp={() => {
           const t = String(window.getSelection?.() || "").trim();
-          if (t.length > 2 && t.length < 400 && onSelect) onSelect(t);
+          if (t.length > 2 && t.length < 1500 && onSelect) onSelect(t);
         }}
         style={{ maxHeight: compact ? 340 : "calc(100vh - 220px)", position: "relative" }}
       >
@@ -753,10 +923,8 @@ function PassagePanel({ prompt, structure, compact, where, focus, onWord, onSele
               <div
                 className={secIdx === 0 ? "mb-1" : "mt-5 mb-1"}
                 style={{
-                  fontFamily: F.mono,
-                  fontSize: 10,
-                  letterSpacing: "0.12em",
-                  textTransform: "uppercase",
+                  fontFamily: F.ui,
+                  fontSize: 12,
                   color: inSection(i) ? C.teal : C.mute,
                   fontWeight: inSection(i) ? 700 : 400,
                 }}
@@ -768,8 +936,8 @@ function PassagePanel({ prompt, structure, compact, where, focus, onWord, onSele
           const isHead = heading[i];
           const isCode = /^\s*(\||```|\s{4})/.test(line);
           const sectionBand = focus === "section" && inSection(i);
-          const paraBand = (focus === "paragraph" && inPara(i)) || (focus === "sentence" && hit && hit.line === i && !hit.exact);
-          const evidenceLine = focus === "sentence" && hit && hit.line === i;
+          const paraBand = focus === "paragraph" && inPara(i);
+          const evidenceLine = focus === "sentence" && [hit, hit2].some((h) => h && h.line === i);
           if (isHead)
             return (
               <div key={i} ref={(el) => (lineEls.current[i] = el)}>
@@ -779,10 +947,8 @@ function PassagePanel({ prompt, structure, compact, where, focus, onWord, onSele
                   style={{
                     fontFamily: F.ui,
                     fontWeight: 700,
-                    fontSize: 12,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
-                    color: C.teal,
+                    fontSize: 15,
+                    color: C.ink,
                     borderLeft: sectionBand ? `3px solid ${C.teal}` : "3px solid transparent",
                     paddingLeft: 8,
                   }}
@@ -836,6 +1002,9 @@ function ResearchExport({ style }) {
       </span>
       <button className="ql-focus" style={b} onClick={exportCandidatesCSV}>Candidates (CSV)</button>
       <button className="ql-focus" style={b} onClick={() => exportLogJSON()}>Full log (JSON)</button>
+      <button className="ql-focus" style={b} onClick={exportReadingCSV}>Focus reading (CSV)</button>
+      <button className="ql-focus" style={b} onClick={exportWrittenCSV}>Written answers (CSV)</button>
+      <button className="ql-focus" style={b} onClick={exportRatingsCSV}>Self-ratings (CSV)</button>
       <button className="ql-focus" style={b} onClick={() => setInspect(true)}>Inspect candidates</button>
       {inspect && <Inspector onClose={() => setInspect(false)} />}
     </div>
@@ -866,6 +1035,42 @@ function FlagExport({ style }) {
 
 /* "Clean up PDF text" — offered under the paste box; highlighted when the
    pasted text looks like it came out of a PDF. One-step undo. */
+/* Upload a .pdf / .docx / .txt; the text is read in the browser and goes into the box,
+   where the reader can check and fix it before starting */
+function FileLoad({ onLoaded }) {
+  const input = useRef(null);
+  const [state, setState] = useState({ busy: false, msg: "", bad: false });
+  const pick = async (file) => {
+    if (!file) return;
+    setState({ busy: true, msg: "Reading " + file.name + "…", bad: false });
+    try {
+      const r = await readTextFile(file);
+      onLoaded(r);
+      setState({ busy: false, msg: `Loaded ${r.words.toLocaleString()} words from ${file.name}. Check the text below before you start.`, bad: false });
+    } catch (e) {
+      setState({ busy: false, msg: e instanceof FileTextError ? e.message : "This file couldn't be read. Try another file, or paste the text.", bad: true });
+    }
+    if (input.current) input.current.value = "";
+  };
+  return (
+    <div className="text-right" style={{ maxWidth: "100%" }}>
+      <input ref={input} type="file" accept=".pdf,.docx,.txt,.md" className="sr-only" id="file-load" onChange={(e) => pick(e.target.files?.[0])} />
+      <label
+        htmlFor="file-load"
+        className="ql-focus inline-block px-3 py-1.5"
+        style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 600, color: C.teal, border: `1px solid ${C.teal}`, borderRadius: 2, cursor: state.busy ? "wait" : "pointer", background: C.card }}
+      >
+        {state.busy ? "Reading…" : "Upload a file"}
+      </label>
+      {state.msg && !state.busy && (
+        <p className="mt-1" role="status" style={{ fontFamily: F.ui, fontSize: 12, color: state.bad ? C.brick : C.slate, lineHeight: 1.45, textAlign: "left" }}>
+          {state.msg}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function CleanButton({ value, onChange }) {
   const [undo, setUndo] = useState(null);
   const [msg, setMsg] = useState("");
@@ -948,6 +1153,13 @@ function Setup({ onStart, onResume }) {
   const [past, setPast] = useState([]);
   const [where, setWhere] = useState("");
   const [meta, setMeta] = useState({ title: "", source: "", licence: "" });
+  const [focusFirst, setFocusFirst] = useState(() => {
+    try {
+      return localStorage.getItem("ql:focusFirst") !== "off";
+    } catch (e) {
+      return true;
+    }
+  });
 
   useEffect(() => {
     listSessions()
@@ -977,7 +1189,7 @@ function Setup({ onStart, onResume }) {
       return;
     }
     setErr("");
-    onStart({ prompt: p.trim(), passage: a.trim(), plan: PLANS[planKey], meta: { ...meta } });
+    onStart({ prompt: p.trim(), passage: a.trim(), plan: PLANS[planKey], meta: { ...meta }, focusFirst });
   };
 
   const box = {
@@ -995,22 +1207,23 @@ function Setup({ onStart, onResume }) {
 
   return (
     <div className="max-w-3xl mx-auto px-5 py-10 sm:py-16">
-      <Eyebrow>PIRLS 1–4 · PISA aspects</Eyebrow>
+      <p style={{ fontFamily: F.ui, fontSize: 14, fontWeight: 700, color: C.teal }}>AARC Reading Lab</p>
       <h1
         className="mt-3"
-        style={{ fontFamily: F.read, fontSize: 46, lineHeight: 1.05, color: C.ink, fontWeight: 600 }}
+        style={{ fontFamily: F.read, fontSize: "clamp(32px, 8vw, 46px)", lineHeight: 1.08, color: C.ink, fontWeight: 600, textWrap: "balance" }}
       >
-        Read it by answering it.
+        Read it yourself first. Then see what you understood.
       </h1>
       <p className="mt-3 max-w-xl" style={{ fontFamily: F.ui, fontSize: 16, color: C.slate, lineHeight: 1.6 }}>
-        Paste a conversation. You get a climb of questions that start with finding facts and end with
-        judging the answer — one question per screen, with the passage beside you.
+        Paste or upload a text you need to read. You read it on your own, then answer questions that
+        start with finding facts and end with judging the text, with the passage beside you.
       </p>
+      <StepBar current={-1} />
 
       <div className="mt-8 flex gap-1" role="tablist">
         {[
-          ["split", "Two boxes"],
-          ["whole", "Whole transcript"],
+          ["split", "A text"],
+          ["whole", "An AI chat transcript"],
         ].map(([k, label]) => (
           <button
             key={k}
@@ -1019,10 +1232,9 @@ function Setup({ onStart, onResume }) {
             onClick={() => setMode(k)}
             className="ql-focus px-3 py-2"
             style={{
-              fontFamily: F.mono,
-              fontSize: 11,
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
+              fontFamily: F.ui,
+              fontSize: 13,
+              fontWeight: 600,
               background: mode === k ? C.ink : "transparent",
               color: mode === k ? C.card : C.slate,
               border: `1px solid ${mode === k ? C.ink : C.line}`,
@@ -1039,26 +1251,32 @@ function Setup({ onStart, onResume }) {
           <>
             <div>
               <label style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.ink }}>
-                What you asked
+                Why you're reading it <span style={{ fontWeight: 400, color: C.slate }}>(optional)</span>
               </label>
               <textarea
                 className="ql-focus mt-2"
-                style={{ ...box, minHeight: 90 }}
+                style={{ ...box, minHeight: 70 }}
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Your prompt to the AI."
+                placeholder="A question you want answered, or what you need the text for. If the text is an AI reply, paste your prompt here."
               />
             </div>
             <div>
-              <label style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.ink }}>
-                What Claude replied
-              </label>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <label style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.ink }}>The text to read</label>
+                <FileLoad
+                  onLoaded={(r) => {
+                    setPassage(r.text);
+                    setMeta((m) => ({ ...m, title: m.title || r.title }));
+                  }}
+                />
+              </div>
               <textarea
                 className="ql-focus mt-2"
                 style={{ ...box, minHeight: 220 }}
                 value={passage}
                 onChange={(e) => setPassage(e.target.value)}
-                placeholder="The long reply you want to actually read — or text copied from a PDF."
+                placeholder="Paste the text here, or upload a PDF, Word (.docx) or text file."
               />
               <CleanButton value={passage} onChange={setPassage} />
             </div>
@@ -1115,7 +1333,34 @@ function Setup({ onStart, onResume }) {
         </p>
       )}
 
-      <div className="mt-7 flex flex-wrap items-center gap-3">
+      <label
+        htmlFor="focus-first"
+        className="mt-7 flex items-start gap-3 px-3 py-3"
+        style={{ background: focusFirst ? C.tealSoft : "transparent", border: `1px solid ${focusFirst ? C.teal : C.line}`, borderRadius: 2, cursor: "pointer" }}
+      >
+        <input
+          id="focus-first"
+          type="checkbox"
+          checked={focusFirst}
+          onChange={(e) => {
+            setFocusFirst(e.target.checked);
+            try {
+              localStorage.setItem("ql:focusFirst", e.target.checked ? "on" : "off");
+            } catch (err) {
+              /* ignore */
+            }
+          }}
+          style={{ marginTop: 3 }}
+        />
+        <span>
+          <span style={{ fontFamily: F.ui, fontSize: 14, fontWeight: 700, color: C.ink }}>Start with focus reading</span>
+          <span className="block mt-0.5" style={{ fontFamily: F.ui, fontSize: 12, color: C.slate, lineHeight: 1.5 }}>
+            The reader first reads the passage alone, with a timer, word meanings and a tutor for highlighted parts. The questions are written when she finishes, spread across the whole text, and some are built around what she asked about.
+          </span>
+        </span>
+      </label>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3">
         {Object.values(PLANS).map((p) => (
           <button
             key={p.key}
@@ -1266,13 +1511,33 @@ function HintLadder({ item, where, where2, steps, hintLevel, onHint, contextLine
 
   const render = (s, i) => {
     const tag = (
-      <span style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.08em", color: C.slate, marginRight: 8 }}>
-        HINT {i + 1}
+      <span style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color: LOCATION_KINDS.includes(s.kind) ? C.brick : C.slate, marginRight: 8 }}>
+        Hint {i + 1}
+        {LOCATION_KINDS.includes(s.kind) ? " (strong help)" : ""}
       </span>
     );
+    if (s.kind === "strategy") return <p style={row}>{tag}{STRATEGY[item.level] || STRATEGY[2]}</p>;
+    if (s.kind === "section" && item.level === 3 && where2?.section)
+      return where2.section.n === where.section.n ? (
+        <p style={row}>{tag}This question joins two paragraphs of <strong>{sectionLabel(where.section)}</strong>. Read both.</p>
+      ) : (
+        <p style={row}>
+          {tag}This question joins two parts of the text:{" "}
+          <strong>{sectionLabel(where.section.n < where2.section.n ? where.section : where2.section)}</strong> and{" "}
+          <strong>{sectionLabel(where.section.n < where2.section.n ? where2.section : where.section)}</strong>. Read both.
+        </p>
+      );
     if (s.kind === "section")
       return <p style={row}>{tag}Look in <strong>{sectionLabel(where.section)}</strong>.</p>;
     if (s.kind === "locator") return <p style={row}>{tag}{item.hint}</p>;
+    if (s.kind === "paragraph" && item.level === 3 && where2?.section) {
+      const [p, q] = (where.section.n < where2.section.n || (where.section.n === where2.section.n && where.para <= where2.para)) ? [where, where2] : [where2, where];
+      return (
+        <p style={row}>
+          {tag}Focus on <strong>paragraph {p.para || 1}</strong> of Section {p.section.n} and <strong>paragraph {q.para || 1}</strong> of Section {q.section.n}. How do the two parts relate?
+        </p>
+      );
+    }
     if (s.kind === "paragraph")
       return <p style={row}>{tag}Focus on <strong>paragraph {where.para}</strong> of Section {where.section?.n}.</p>;
     if (s.kind === "keyword")
@@ -1296,11 +1561,9 @@ function HintLadder({ item, where, where2, steps, hintLevel, onHint, contextLine
                 <div className="flex items-baseline gap-2 flex-wrap">
                   <span
                     style={{
-                      fontFamily: F.mono,
-                      fontSize: 11,
+                      fontFamily: F.ui,
+                      fontSize: 12,
                       fontWeight: 700,
-                      letterSpacing: "0.08em",
-                      textTransform: "uppercase",
                       color: C.card,
                       background: BAND_COLOR[grade.band],
                       padding: "2px 8px",
@@ -1361,23 +1624,35 @@ function HintLadder({ item, where, where2, steps, hintLevel, onHint, contextLine
           className="ql-focus mt-2"
           style={{ fontFamily: F.ui, fontSize: 13, color: C.slate, textDecoration: "underline" }}
         >
-          {hintLevel === 0 ? "I'm stuck — give me a hint" : "Next hint"} ({hintLevel + 1} of {steps.length})
+          {hintLevel === 0
+            ? "I'm stuck — give me a hint"
+            : LOCATION_KINDS.includes(steps[hintLevel]?.kind)
+            ? "Show me where to look (strong help)"
+            : "Next hint"}{" "}
+          ({hintLevel + 1} of {steps.length})
         </button>
       )}
     </div>
   );
 }
 
-function Question({ item, slotNo, total, answer, onAnswer, onNext, onPrev, isLast, onWord, where, where2, steps, hintLevel, onHint, contextLine, onGraded, savedGrade, passage, flagMeta, onFlagSaved }) {
+function Question({ item, slotNo, total, answer, onAnswer, onNext, onPrev, isLast, onWord, onAskCoach, where, where2, steps, hintLevel, onHint, contextLine, onGraded, savedGrade, passage, flagMeta, onFlagSaved }) {
   const L = LEVELS[item.level - 1];
   const answered = !!answer;
 
   return (
     <div>
       <div className="flex items-baseline justify-between gap-4">
-        <Eyebrow color={C.teal}>
-          {L.pirls}
-        </Eyebrow>
+        <span>
+          <Eyebrow color={C.teal}>
+            {L.pirls}
+          </Eyebrow>
+          {item.focusKind === "vocab" && (
+            <span className="block mt-1" style={{ fontFamily: F.ui, fontSize: 12, color: C.slate }}>
+              A word you saved while reading · the sentence is marked in the passage
+            </span>
+          )}
+        </span>
         <span className="flex items-baseline gap-3" style={{ fontFamily: F.mono, fontSize: 11, color: C.mute, whiteSpace: "nowrap" }}>
           {slotNo > 1 && (
             <button onClick={onPrev} className="ql-focus" style={{ fontFamily: F.mono, fontSize: 11, color: C.slate, textDecoration: "underline" }}>
@@ -1394,6 +1669,14 @@ function Question({ item, slotNo, total, answer, onAnswer, onNext, onPrev, isLas
       >
         <Words text={item.stem} onWord={onWord} />
       </h2>
+      {onAskCoach && (
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 items-center" style={{ fontFamily: F.ui, fontSize: 13 }}>
+          <button onClick={onAskCoach} className="ql-focus" style={{ color: C.teal, textDecoration: "underline", fontWeight: 600 }}>
+            {answered ? (answer.correct ? "Ask the coach about this question" : "Ask the coach why my answer is wrong") : "What is this question asking?"}
+          </button>
+          <span style={{ color: C.mute }}>Tap any word in the question or the options to see its meaning.</span>
+        </div>
+      )}
 
       {!answered && (
         <HintLadder item={item} where={where} where2={where2} steps={steps} hintLevel={hintLevel} onHint={onHint} contextLine={contextLine} onGraded={onGraded} savedGrade={savedGrade} />
@@ -1433,39 +1716,55 @@ function Question({ item, slotNo, total, answer, onAnswer, onNext, onPrev, isLas
           }
           return (
             <div key={i}>
-              <button
-                onClick={() => !answered && onAnswer(i)}
-                disabled={answered}
-                className="ql-opt ql-focus w-full text-left flex gap-3 items-start px-4 py-3"
+              <div
+                className="ql-opt w-full flex items-stretch"
                 style={{
                   background: bg,
                   border: `1px solid ${border}`,
                   borderRadius: 2,
-                  cursor: answered ? "default" : "pointer",
                   opacity: answered && !isRight && !chosen ? 0.6 : 1,
                 }}
               >
-                <span
-                  className="ql-bubble shrink-0 flex items-center justify-center"
+                {/* v10.4: only the letter chooses, so words in the option can be tapped for their meaning */}
+                <button
+                  onClick={() => !answered && onAnswer(i)}
+                  disabled={answered}
+                  aria-label={"Choose " + LETTERS[i]}
+                  className="ql-choose ql-focus shrink-0 flex flex-col items-center justify-center"
                   style={{
-                    width: 26,
-                    height: 26,
-                    borderRadius: 999,
-                    background: bubbleBg,
-                    border: `1.5px solid ${bubbleBorder}`,
-                    color: bubbleColor,
-                    fontFamily: F.mono,
-                    fontSize: 12,
-                    fontWeight: 700,
-                    marginTop: 1,
+                    width: 64,
+                    minHeight: 56,
+                    borderRight: `1px solid ${answered ? border : C.line}`,
+                    background: answered ? "transparent" : C.paper,
+                    cursor: answered ? "default" : "pointer",
                   }}
                 >
-                  {LETTERS[i]}
+                  <span
+                    className="ql-bubble flex items-center justify-center"
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 999,
+                      background: bubbleBg,
+                      border: `2px solid ${answered ? bubbleBorder : C.ink}`,
+                      color: answered ? bubbleColor : C.ink,
+                      fontFamily: F.mono,
+                      fontSize: 15,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {LETTERS[i]}
+                  </span>
+                  {!answered && (
+                    <span style={{ fontFamily: F.ui, fontSize: 10, color: C.slate, marginTop: 3, letterSpacing: "0.04em" }}>choose</span>
+                  )}
+                </button>
+                <span className="px-4 py-3 flex items-center" style={{ fontFamily: F.ui, fontSize: 15, lineHeight: 1.5, color: C.ink }}>
+                  <span>
+                    <Words text={o.text} onWord={onWord} />
+                  </span>
                 </span>
-                <span style={{ fontFamily: F.ui, fontSize: 15, lineHeight: 1.5, color: C.ink }}>
-                  {answered ? <Words text={o.text} onWord={onWord} /> : o.text}
-                </span>
-              </button>
+              </div>
               {answered && (
                 <p
                   className="mt-1 mb-2 pl-4"
@@ -1528,11 +1827,20 @@ function Question({ item, slotNo, total, answer, onAnswer, onNext, onPrev, isLas
 /* -------------------------- Open question ------------------------ */
 
 function OpenQuestion({ q, passage, onDone, structure, onUpdate, onFocus }) {
+  /* everything below is restored from q, so leaving and coming back
+     (or reviewing later) shows exactly what she wrote and what she got */
   const [text, setText] = useState(q.draft || "");
-  const [busy, setBusy] = useState(false);
-  const [mark, setMark] = useState(null);
+  const [mark, setMark] = useState(q.mark || null);
+  const [revision, setRevision] = useState(q.revision ?? q.draft ?? "");
+  const [improved, setImproved] = useState(q.improved || null);
+  const [revisedDone, setRevisedDone] = useState(!!q.revisedAt);
+  const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
-  const [showModel, setShowModel] = useState(false);
+
+  const save = (patch) => {
+    onUpdate(patch);
+    if (q.written_id) logWritten({ written_id: q.written_id, ...patch });
+  };
 
   const submit = async () => {
     if (text.trim().length < 40) {
@@ -1540,26 +1848,84 @@ function OpenQuestion({ q, passage, onDone, structure, onUpdate, onFocus }) {
       return;
     }
     setErr("");
-    setBusy(true);
+    /* her answer is saved before the marking call, so a failed call never loses it */
+    save({ draft: text, answer: text, submittedAt: new Date().toISOString() });
+    setBusy("mark");
     try {
-      const raw = await ask(buildMarkPrompt(passage, q.stem, q.criteria, text), {
-        maxTokens: 1200,
-        schema: MARK_SCHEMA,
-      });
-      setMark(parseJSON(raw));
+      const m = await markAnswer({ passage, stem: q.stem, criteria: q.criteria, answer: text });
+      setMark(m);
+      setRevision(text);
+      save({ mark: m, markedAt: new Date().toISOString() });
     } catch (e) {
-      setErr("Marking failed. Try again in a moment.");
+      setErr("Marking failed — your answer is saved. Try again in a moment.");
     }
-    setBusy(false);
+    setBusy("");
   };
+
+  const finishRevision = async (skipped) => {
+    const final = skipped ? text : revision;
+    if (!skipped && final.trim().length < 40) {
+      setErr("Write a bit more, or choose “Skip, show me”.");
+      return;
+    }
+    setErr("");
+    const at = new Date().toISOString();
+    save({ revision: skipped ? "" : final, revisionSkipped: !!skipped, revisedAt: at });
+    setRevisedDone(true);
+    setBusy("improve");
+    try {
+      const imp = await improveAnswer({ passage, stem: q.stem, criteria: q.criteria, answer: final, missing: mark?.missing });
+      if (!imp.segments.length) throw new Error("empty");
+      let strong = mark?.model || "";
+      if (!strong) strong = await strongAnswer({ passage, stem: q.stem, criteria: q.criteria });
+      const next = { ...imp, based_on: skipped ? "first" : "revision", strong };
+      setImproved(next);
+      save({ improved: next, improvedAt: new Date().toISOString() });
+    } catch (e) {
+      setErr("Couldn't build the improved answer. Your writing is saved — try again.");
+    }
+    setBusy("");
+  };
+
+  const box = (value, onChange, onBlur, disabled, placeholder) => (
+    <textarea
+      className="ql-focus mt-4"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={onBlur}
+      disabled={disabled}
+      placeholder={placeholder}
+      style={{
+        width: "100%",
+        minHeight: 160,
+        fontFamily: F.ui,
+        fontSize: 15,
+        lineHeight: 1.6,
+        color: C.ink,
+        background: disabled ? C.paper : C.card,
+        border: `1px solid ${C.line}`,
+        borderRadius: 2,
+        padding: "12px 14px",
+        resize: "vertical",
+      }}
+    />
+  );
+  const primary = (label, onClick, disabled) => (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="ql-focus mt-4 px-5 py-3"
+      style={{ background: disabled ? C.slate : C.ink, color: C.card, border: "none", borderRadius: 2, fontFamily: F.ui, fontSize: 14, fontWeight: 700 }}
+    >
+      {label}
+    </button>
+  );
+  const small = (t, color = C.slate) => <p style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color, letterSpacing: "0.04em" }}>{t}</p>;
 
   return (
     <div>
       <Eyebrow color={C.teal}>Evaluate and reflect · written</Eyebrow>
-      <h2
-        className="mt-4"
-        style={{ fontFamily: F.read, fontSize: 26, lineHeight: 1.3, color: C.ink, fontWeight: 600 }}
-      >
+      <h2 className="mt-4" style={{ fontFamily: F.read, fontSize: 26, lineHeight: 1.3, color: C.ink, fontWeight: 600 }}>
         {q.stem}
       </h2>
       {q.criteria && q.criteria.length > 0 && (
@@ -1591,27 +1957,8 @@ function OpenQuestion({ q, passage, onDone, structure, onUpdate, onFocus }) {
         />
       )}
 
-      <textarea
-        className="ql-focus mt-5"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={() => onUpdate({ draft: text })}
-        disabled={!!mark}
-        placeholder="Your answer. Point at the passage where you can."
-        style={{
-          width: "100%",
-          minHeight: 180,
-          fontFamily: F.ui,
-          fontSize: 15,
-          lineHeight: 1.6,
-          color: C.ink,
-          background: C.card,
-          border: `1px solid ${C.line}`,
-          borderRadius: 2,
-          padding: "12px 14px",
-          resize: "vertical",
-        }}
-      />
+      <div className="mt-5">{mark && small("Your first answer")}</div>
+      {box(text, setText, () => onUpdate({ draft: text }), !!mark, "Your answer. Point at the passage where you can.")}
 
       {err && (
         <p className="mt-3" style={{ fontFamily: F.ui, fontSize: 13, color: C.brick }}>
@@ -1620,22 +1967,21 @@ function OpenQuestion({ q, passage, onDone, structure, onUpdate, onFocus }) {
       )}
 
       {!mark && (
-        <button
-          onClick={submit}
-          disabled={busy}
-          className="ql-focus mt-4 px-5 py-3"
-          style={{
-            background: busy ? C.slate : C.ink,
-            color: C.card,
-            border: "none",
-            borderRadius: 2,
-            fontFamily: F.ui,
-            fontSize: 14,
-            fontWeight: 700,
-          }}
-        >
-          {busy ? "Reading your answer…" : "Get feedback"}
-        </button>
+        <div className="flex flex-wrap items-center gap-4">
+          {primary(busy === "mark" ? "Reading your answer…" : "Get feedback", submit, !!busy)}
+          {/* v10.4: optional — a short session can end after the multiple-choice questions */}
+          <button
+            onClick={() => {
+              save({ skipped: true, skippedAt: new Date().toISOString(), draft: text });
+              onDone();
+            }}
+            disabled={!!busy}
+            className="ql-focus mt-4"
+            style={{ fontFamily: F.ui, fontSize: 13, color: C.slate, textDecoration: "underline" }}
+          >
+            Skip the written question
+          </button>
+        </div>
       )}
 
       {mark && (
@@ -1643,81 +1989,115 @@ function OpenQuestion({ q, passage, onDone, structure, onUpdate, onFocus }) {
           <Eyebrow color={mark.verdict === "thin" ? C.brick : C.teal}>{mark.verdict}</Eyebrow>
           <div className="mt-3 grid sm:grid-cols-2 gap-5">
             <div>
-              <p style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color: C.teal }}>Working</p>
+              {small("Working", C.teal)}
               <ul className="mt-1 space-y-1">
                 {(mark.strengths || []).map((s, i) => (
-                  <li key={i} style={{ fontFamily: F.ui, fontSize: 14, color: C.ink, lineHeight: 1.5 }}>
-                    {s}
-                  </li>
+                  <li key={i} style={{ fontFamily: F.ui, fontSize: 14, color: C.ink, lineHeight: 1.5 }}>{s}</li>
                 ))}
               </ul>
             </div>
             <div>
-              <p style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color: C.brick }}>Missing</p>
+              {small("Missing", C.brick)}
               <ul className="mt-1 space-y-1">
                 {(mark.missing || []).map((s, i) => (
-                  <li key={i} style={{ fontFamily: F.ui, fontSize: 14, color: C.ink, lineHeight: 1.5 }}>
-                    {s}
-                  </li>
+                  <li key={i} style={{ fontFamily: F.ui, fontSize: 14, color: C.ink, lineHeight: 1.5 }}>{s}</li>
                 ))}
               </ul>
             </div>
           </div>
           {mark.nudge && (
-            <p
-              className="mt-5 px-4 py-3"
-              style={{
-                fontFamily: F.read,
-                fontSize: 17,
-                color: C.ink,
-                background: C.amberSoft,
-                borderRadius: 2,
-              }}
-            >
+            <p className="mt-5 px-4 py-3" style={{ fontFamily: F.read, fontSize: 17, color: C.ink, background: C.amberSoft, borderRadius: 2 }}>
               {mark.nudge}
             </p>
           )}
-          <div className="mt-4">
-            {showModel ? (
-              <p
-                className="px-4 py-3"
-                style={{
-                  fontFamily: F.read,
-                  fontSize: 16,
-                  lineHeight: 1.6,
-                  color: C.ink,
-                  border: `1px solid ${C.line}`,
-                  borderRadius: 2,
-                }}
-              >
-                {mark.model}
+
+          {/* one revision attempt, before any better version is shown */}
+          {!revisedDone ? (
+            <div className="mt-6">
+              {small("Try once more")}
+              <p className="mt-1" style={{ fontFamily: F.ui, fontSize: 13, color: C.slate, lineHeight: 1.5 }}>
+                Use the question above to improve your answer. Then you'll see your answer improved, and a strong answer to compare.
               </p>
-            ) : (
-              <button
-                onClick={() => setShowModel(true)}
-                className="ql-focus"
-                style={{ fontFamily: F.ui, fontSize: 13, color: C.slate, textDecoration: "underline" }}
-              >
-                Show a strong answer
-              </button>
-            )}
-          </div>
-          <button
-            onClick={onDone}
-            className="ql-focus mt-6 px-5 py-3"
-            style={{
-              background: C.ink,
-              color: C.card,
-              border: "none",
-              borderRadius: 2,
-              fontFamily: F.ui,
-              fontSize: 14,
-              fontWeight: 700,
-            }}
-          >
-            See how the climb went
-          </button>
+              {box(revision, setRevision, () => onUpdate({ revisionDraft: revision }), !!busy, "Edit your answer here.")}
+              <div className="flex flex-wrap items-center gap-4">
+                {primary("Submit my revision", () => finishRevision(false), !!busy)}
+                <button
+                  onClick={() => finishRevision(true)}
+                  disabled={!!busy}
+                  className="ql-focus mt-4"
+                  style={{ fontFamily: F.ui, fontSize: 13, color: C.slate, textDecoration: "underline" }}
+                >
+                  Skip, show me
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-6">
+              {q.revision && (
+                <>
+                  {small("Your revision")}
+                  <p className="mt-1 px-4 py-3" style={{ fontFamily: F.ui, fontSize: 15, lineHeight: 1.6, color: C.ink, background: C.paper, borderRadius: 2, whiteSpace: "pre-wrap" }}>
+                    {q.revision}
+                  </p>
+                </>
+              )}
+              {busy === "improve" && (
+                <p className="mt-4" style={{ fontFamily: F.ui, fontSize: 14, color: C.slate }}>Improving your answer…</p>
+              )}
+              {!improved && !busy && primary("Try again", () => finishRevision(!!q.revisionSkipped), false)}
+              {improved && <ImprovedAnswer improved={improved} />}
+            </div>
+          )}
+
+          {primary("See how the climb went", onDone, busy === "mark")}
         </div>
+      )}
+    </div>
+  );
+}
+
+/* her answer with the additions marked, then a strong answer to compare */
+function ImprovedAnswer({ improved }) {
+  const adds = (improved.segments || []).filter((s) => s.added);
+  return (
+    <div className="mt-5">
+      <p style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color: C.teal, letterSpacing: "0.04em" }}>
+        Your answer, improved
+      </p>
+      <p className="mt-1" style={{ fontFamily: F.ui, fontSize: 12, color: C.slate }}>
+        Your words are kept. <span style={{ background: C.amberSoft, padding: "0 3px" }}>Highlighted</span> parts were added or changed
+        {improved.based_on === "revision" ? " (built from your revision)." : " (built from your first answer)."}
+      </p>
+      <p className="mt-2 px-4 py-3" style={{ fontFamily: F.read, fontSize: 17, lineHeight: 1.7, color: C.ink, border: `1px solid ${C.line}`, borderRadius: 2 }}>
+        {(improved.segments || []).map((s, i) =>
+          s.added ? (
+            <mark key={i} title={s.why} style={{ background: C.amberSoft, color: C.ink, padding: "0 2px" }}>
+              {s.text}
+              <sup style={{ fontFamily: F.ui, fontSize: 10, color: C.amber, fontWeight: 700 }}>{adds.indexOf(s) + 1}</sup>{" "}
+            </mark>
+          ) : (
+            <span key={i}>{s.text} </span>
+          )
+        )}
+      </p>
+      {adds.length > 0 && (
+        <ol className="mt-2 space-y-1">
+          {adds.map((s, i) => (
+            <li key={i} style={{ fontFamily: F.ui, fontSize: 13, color: C.slate, lineHeight: 1.5 }}>
+              <b style={{ color: C.amber }}>{i + 1}</b> {s.why || "added"}
+            </li>
+          ))}
+        </ol>
+      )}
+      {improved.strong && (
+        <>
+          <p className="mt-5" style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color: C.slate, letterSpacing: "0.04em" }}>
+            A strong answer, for comparison
+          </p>
+          <p className="mt-1 px-4 py-3" style={{ fontFamily: F.read, fontSize: 16, lineHeight: 1.6, color: C.ink, background: C.paper, borderRadius: 2 }}>
+            {improved.strong}
+          </p>
+        </>
       )}
     </div>
   );
@@ -1725,7 +2105,7 @@ function OpenQuestion({ q, passage, onDone, structure, onUpdate, onFocus }) {
 
 /* ----------------------------- Review ---------------------------- */
 
-function Review({ byLevel, answers, onRestart, onRetry, rejected = [], shortfalls = [] }) {
+function Review({ byLevel, answers, onRestart, onRetry, rejected = [], shortfalls = [], openQ = null, onOpenWritten, selfRating = {}, onRate }) {
   const rows = LEVELS.map((L) => {
     const items = byLevel[L.n] || [];
     let right = 0;
@@ -1742,8 +2122,44 @@ function Review({ byLevel, answers, onRestart, onRetry, rejected = [], shortfall
   const total = rows.reduce((s, r) => s + r.done, 0);
   const correct = rows.reduce((s, r) => s + r.right, 0);
   const given = Object.values(answers);
-  const noHint = given.filter((a) => !a.hints).length;
-  const sawEvidence = given.filter((a) => (a.hintKinds || []).includes("evidence")).length;
+  const noHint = given.filter((a) => !a.hints && !(a.coach || []).length).length;
+  const sawEvidence = given.filter((a) => a.locationShown || (a.hintKinds || []).some((k) => ["section", "locator", "paragraph", "evidence"].includes(k))).length;
+  const usedCoach = given.filter((a) => (a.coach || []).length).length;
+  /* correct with no hint and no coach: the "actual" side of calibration */
+  const unaidedCorrect = given.filter((a) => a.correct && !a.hints && !(a.coach || []).length).length;
+  const [pendingRate, setPendingRate] = useState(null);
+
+  /* AARC calibration: ask how much she understands BEFORE showing any result,
+     so the score cannot shape the rating */
+  if (onRate && given.length > 0 && selfRating.after_questions == null)
+    return (
+      <div className="max-w-2xl mx-auto px-5 py-12">
+        <Eyebrow>Before your results</Eyebrow>
+        <div className="mt-4 px-5 py-5" style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 2 }}>
+          <SelfRating
+            id="rate-after-questions"
+            value={pendingRate}
+            onChange={setPendingRate}
+            question="Now that you've done the questions: how much of the text do you think you understand? (0–10)"
+          />
+          <button
+            onClick={() =>
+              onRate(pendingRate, {
+                answered_total: given.length,
+                correct_total: correct,
+                unaided_correct: unaidedCorrect,
+                unaided_correct_pct: Math.round((unaidedCorrect / given.length) * 100),
+              })
+            }
+            disabled={pendingRate == null}
+            className="ql-focus mt-4 px-5 py-3"
+            style={{ background: pendingRate == null ? C.mute : C.ink, color: C.card, borderRadius: 2, fontFamily: F.ui, fontSize: 14, fontWeight: 700 }}
+          >
+            Show my results
+          </button>
+        </div>
+      </div>
+    );
   const attempted = rows.filter((r) => r.done > 0);
   const weakest = attempted.slice().sort((a, b) => a.right / a.done - b.right / b.done)[0];
   const missed = [];
@@ -1765,8 +2181,21 @@ function Review({ byLevel, answers, onRestart, onRetry, rejected = [], shortfall
       </h2>
       {given.length > 0 && (
         <p className="mt-2" style={{ fontFamily: F.mono, fontSize: 12, color: C.slate }}>
-          {noHint} of {given.length} answered without a hint · {sawEvidence} needed the evidence shown
+          {noHint} of {given.length} answered without help · {sawEvidence} needed to be shown where to look · {usedCoach} used the question coach
         </p>
+      )}
+      {selfRating.after_questions != null && (
+        <div className="mt-4 px-4 py-3" style={{ background: C.tealSoft, borderRadius: 2 }}>
+          <p style={{ fontFamily: F.ui, fontSize: 13, fontWeight: 700, color: C.teal }}>How well you thought you understood</p>
+          <p className="mt-1" style={{ fontFamily: F.ui, fontSize: 15, color: C.ink, lineHeight: 1.6 }}>
+            {selfRating.after_reading != null && (
+              <>
+                After reading: <b>{selfRating.after_reading}/10</b> ·{" "}
+              </>
+            )}
+            After the questions: <b>{selfRating.after_questions}/10</b> · Correct without any help: <b>{unaidedCorrect} of {given.length}</b>
+          </p>
+        </div>
       )}
       {shortfalls.length > 0 && (
         <p className="mt-1" style={{ fontFamily: F.mono, fontSize: 12, color: C.brick }}>
@@ -1872,8 +2301,56 @@ function Review({ byLevel, answers, onRestart, onRetry, rejected = [], shortfall
           New passage
         </button>
       </div>
+      {openQ && <WrittenReview q={openQ} onOpen={onOpenWritten} />}
       <ResearchExport style={{ marginTop: 28 }} />
       <FlagExport style={{ marginTop: 8 }} />
+    </div>
+  );
+}
+
+/* the written question on the review screen: everything that was saved */
+function WrittenReview({ q, onOpen }) {
+  const lab = (t) => (
+    <p className="mt-4" style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 700, color: C.slate, letterSpacing: "0.04em" }}>
+      {t}
+    </p>
+  );
+  const body = (t) => (
+    <p className="mt-1" style={{ fontFamily: F.ui, fontSize: 15, lineHeight: 1.6, color: C.ink, whiteSpace: "pre-wrap" }}>
+      {t}
+    </p>
+  );
+  const answer = q.answer || q.draft || "";
+  return (
+    <div className="mt-8 pt-6" style={{ borderTop: `1px solid ${C.line}` }}>
+      <Eyebrow color={C.teal}>Written question</Eyebrow>
+      <p className="mt-3" style={{ fontFamily: F.read, fontSize: 19, lineHeight: 1.4, color: C.ink, fontWeight: 600 }}>
+        {q.stem}
+      </p>
+      {answer ? (
+        <>
+          {lab(q.mark ? "Your first answer · " + String(q.mark.verdict || "") : "Your draft (not submitted)")}
+          {body(answer)}
+        </>
+      ) : (
+        body(q.skipped ? "Skipped." : "Not answered yet.")
+      )}
+      {q.revision && (
+        <>
+          {lab("Your revision")}
+          {body(q.revision)}
+        </>
+      )}
+      {q.improved && <ImprovedAnswer improved={q.improved} />}
+      {onOpen && !q.improved && (
+        <button
+          onClick={onOpen}
+          className="ql-focus mt-4"
+          style={{ fontFamily: F.ui, fontSize: 13, color: C.teal, textDecoration: "underline" }}
+        >
+          {answer ? "Continue the written question" : "Answer the written question"}
+        </button>
+      )}
     </div>
   );
 }
@@ -1975,6 +2452,11 @@ export default function App() {
   const [showVocab, setShowVocab] = useState(false);
   const [lookup, setLookup] = useState(null);
   const [hintMap, setHintMap] = useState({});
+  /* v10.4: question-coach use per question (counts as help) */
+  const [coachMap, setCoachMap] = useState({});
+  const [lookupMap, setLookupMap] = useState({});
+  /* AARC calibration ratings for this session */
+  const [selfRating, setSelfRating] = useState({});
   const [openFocus, setOpenFocus] = useState({ where: null, focus: "none" });
   const rejectedRef = useRef([]);
   const runRef = useRef(null);
@@ -2014,15 +2496,14 @@ export default function App() {
   /* the passage shows only the location the learner has asked for.
      After answering, the evidence is shown as feedback. */
   const earned = steps.slice(0, hintLevel).map((s) => s.kind);
-  const passageFocus = hasAnswered
+  /* a question on a word she saved tests the word, not finding it: show the sentence at once */
+  const passageFocus = hasAnswered || item?.focusKind === "vocab"
     ? "sentence"
-    : earned.includes("evidence")
-    ? "sentence"
-    : earned.includes("paragraph")
-    ? "paragraph"
     : earned.includes("section")
     ? "section"
     : "none";
+  /* the key-word hint is the last step: by then the location is given, so the word is marked in the text too */
+  const passageKeyword = !hasAnswered && earned.includes("keyword") ? item?.keyword || "" : "";
 
   const runGeneration = useCallback(async (source) => {
     const cfg = loadConfig();
@@ -2065,6 +2546,14 @@ export default function App() {
         logRunModel(runId, m);
       }
     };
+    /* v10.4 coverage: quarters of the text, and a plan for every question slot */
+    const qm = quarterMap(st.lines);
+    const markedPassage = passageWithQuarters(st.lines);
+    const blueprint = buildBlueprint(source.plan.counts, source.reading?.focus || [], qm.available);
+    const filledSlots = new Set();
+    const usedAnchors = [];
+    /* v10.4: spread the correct answer evenly over A–D (models favour A) */
+    const keyOrder = keyPlan(runId);
     const pmeta = source.meta || {};
     logPassage(pid, source.passage, {
       title: pmeta.title || (source.passage || "").slice(0, 70).replace(/\s+/g, " "),
@@ -2082,6 +2571,10 @@ export default function App() {
       validator_version: VALIDATOR_VERSION,
       settings,
       passage_meta: { title: pmeta.title || "", source: pmeta.source || "", licence: pmeta.licence || "" },
+      reading_id: source.reading?.reading_id || "",
+      coverage_version: COVERAGE_VERSION,
+      coverage_plan: blueprint,
+      coverage_summary: blueprintSummary(blueprint),
       started_at: new Date().toISOString(),
     });
     let nCalls = 0;
@@ -2118,6 +2611,10 @@ export default function App() {
 
       while (collected.length < need && callsThisLevel < MAX_CALLS) {
         const want = Math.min(chunk, need - collected.length);
+        /* v10.4: the planned slots this request should fill (quarter + reader focus) */
+        const batch = blueprint.filter((sl) => sl.level === L.n && !filledSlots.has(sl.slot_id)).slice(0, want);
+        /* after two rounds of misses, take good evidence from any quarter rather than lose the item */
+        const relaxQuarter = callsThisLevel >= need * 2;
         let got = [];
         /* schema-constrained first; step down if this build or model can't do it */
         /* output budget per item, measured to fit a full item with all
@@ -2146,7 +2643,7 @@ export default function App() {
           const feedback = lastReasons.length
             ? "\n\nYour previous items were rejected for these reasons — avoid them: " + [...new Set(lastReasons)].join("; ") + "."
             : "";
-          const args = { level: L.n, count: want, passage: source.passage, usedStems: used.slice(-6), cfg, exemplars: ex };
+          const args = { level: L.n, count: want, passage: source.passage, usedStems: used, cfg, exemplars: ex, markedPassage, slots: batch, usedAnchors };
           const promptText = buildItemPromptV10(args) + pass.extra + feedback;
           const callId = runId + "-C" + String(++nCalls).padStart(3, "0");
           callsThisLevel++;
@@ -2156,6 +2653,8 @@ export default function App() {
             passage_id: pid,
             intended_process: L.n,
             items_requested: want,
+            slot_ids: batch.map((sl) => sl.slot_id),
+            target_quarters: batch.map((sl) => sl.quarter),
             pass_mode: pass.mode,
             max_tokens: pass.tokens,
             prompt_version: PROMPT_VERSION,
@@ -2182,7 +2681,7 @@ export default function App() {
             logCall({ ...call, ok: true, latency_ms: lastExchange.ms, meta: lastExchange.meta, raw_reply: raw, shortfall_reason: parsed?.shortfall_reason || "" });
           } catch (e) {
             noteCloudModel();
-            logCall({ ...call, ok: false, error: e.message, error_kind: /^Output truncated/.test(e.message) ? "output_truncated" : /^Thinking exhaustion|only reasoning/.test(e.message) ? "thinking_exhaustion" : "call_or_parse_error", latency_ms: lastExchange.ms, meta: lastExchange.meta, raw_reply: raw || String(lastExchange.raw || ""), thinking_reply: lastExchange.thinking || "" });
+            logCall({ ...call, ok: false, error: e.message, error_kind: /^Output truncated/.test(e.message) ? "output_truncated" : /^Thinking exhaustion|only reasoning/.test(e.message) ? "thinking_exhaustion" : /^Empty reply/.test(e.message) ? "empty_reply" : /^Provider filtered/.test(e.message) ? "provider_filtered" : "call_or_parse_error", latency_ms: lastExchange.ms, meta: lastExchange.meta, raw_reply: raw || String(lastExchange.raw || ""), thinking_reply: lastExchange.thinking || "" });
             diag = { kind: "call_failed", call_id: callId, stage: pass.mode, error: e.message, raw: String(raw || lastExchange.raw || ""), thinking: lastExchange.thinking || "", meta: lastExchange.meta };
             if (/died|No response|reachable/i.test(e.message)) await new Promise((r) => setTimeout(r, 4000));
             continue;
@@ -2192,6 +2691,11 @@ export default function App() {
           const reasons = [];
           const logged = records.map((rec) => {
             const candidateId = runId + "-P" + L.n + "-" + String(++nCand).padStart(3, "0");
+            if (rec.item) {
+              const moved = placeKey(rec.item.options, keyOrder[(nCand - 1) % 4], candidateId);
+              rec.item = { ...rec.item, options: moved.options, key_original_index: moved.from };
+              if (moved.from !== moved.to) rec.repairs.push("options reordered: key moved from " + LETTERS[moved.from] + " to " + LETTERS[moved.to]);
+            }
             let res = { checks: {}, reasons: [], anchor_loc: null, anchor2_loc: null, anchor_match: "none" };
             if (rec.item && (L.n === 3 || L.n === 4)) l3Pending.push({ candidateId, item: rec.item, process: L.n });
             if (rec.item) {
@@ -2202,10 +2706,61 @@ export default function App() {
               if (!res.checks.not_duplicate) res.reasons.push("Duplicate of an earlier item in this run");
               else seenStems.add(key);
             }
+            /* v10.4 coverage: distinct evidence, planned quarter, reader focus */
+            let slotMatch = null;
+            let aQuarter = null;
+            if (rec.item && res.anchor_loc) {
+              const aLine = res.anchor_loc.line;
+              const bLine = res.anchor2_loc?.line;
+              /* quarter of the evidence itself (sentence level), not of its paragraph */
+              const aw = locate(st, rec.item.anchor);
+              aQuarter = qm.posQuarter(aLine, aw ? aw.sortKey % 100000 : 0);
+              const ev = contentWords(rec.item.anchor);
+              const reused =
+                ev.length >= 3 &&
+                usedAnchors.some((u) => {
+                  const uw = new Set(contentWords(u));
+                  return ev.filter((w) => uw.has(w)).length / ev.length >= 0.6;
+                });
+              res.checks.distinct_evidence = !reused;
+              if (reused) res.reasons.push("Uses the same evidence as an earlier question");
+              const addressed = (sl) => {
+                const f = sl.focus;
+                if (!f) return true;
+                if (f.kind === "vocab") {
+                  const w = norm(f.text);
+                  return [rec.item.keyword, rec.item.stem, rec.item.anchor].some((t) => norm(t || "").includes(w));
+                }
+                const inRange = (ln) => ln != null && f.start_line != null && ln >= f.start_line && ln <= f.end_line;
+                if (inRange(aLine) || inRange(bLine)) return true;
+                const fw = new Set(contentWords(f.text));
+                return ev.length > 0 && ev.filter((w) => fw.has(w)).length / ev.length >= 0.5;
+              };
+              const open = batch.filter((sl) => !filledSlots.has(sl.slot_id));
+              slotMatch =
+                open.find((sl) => sl.focus && sl.quarter === aQuarter && addressed(sl)) ||
+                open.find((sl) => !sl.focus && sl.quarter === aQuarter) ||
+                (relaxQuarter ? open.find((sl) => sl.focus && addressed(sl)) || open.find((sl) => !sl.focus) : null);
+              res.checks.in_target_quarter = slotMatch ? slotMatch.quarter === aQuarter : false;
+              res.checks.focus_addressed = slotMatch?.focus ? addressed(slotMatch) : null;
+              if (!slotMatch) {
+                const focusOnly = open.some((sl) => sl.focus && sl.quarter === aQuarter);
+                res.reasons.push(
+                  focusOnly
+                    ? "Not built around the part the reader asked about"
+                    : "Evidence is from quarter " + aQuarter + ", not the planned quarter " + [...new Set(open.map((sl) => sl.quarter))].join(" or ")
+                );
+              } else if (!res.checks.in_target_quarter) rec.repairs.push("quarter relaxed after " + callsThisLevel + " requests");
+            }
             const allReasons = [...rec.reasons, ...res.reasons];
             const accepted = !!rec.item && allReasons.length === 0;
             reasons.push(...allReasons);
-            if (accepted && collected.length + got.length < need) got.push({ ...rec.item, candidateId, runId, passageId: pid });
+            if (accepted && collected.length + got.length < need) {
+              got.push({ ...rec.item, candidateId, runId, passageId: pid, slotId: slotMatch?.slot_id || "", quarter: aQuarter, focusKind: slotMatch?.focus?.kind || "" });
+              if (slotMatch) filledSlots.add(slotMatch.slot_id);
+              usedAnchors.push(rec.item.anchor);
+              if (rec.item.anchor2) usedAnchors.push(rec.item.anchor2);
+            }
             const tooMany = accepted && !got.some((g) => g.candidateId === candidateId);
             if (!accepted) rejectedRef.current.push({ level: L.n, stem: rec.item?.stem || String(rec.raw?.stem || ""), reason: allReasons.join("; "), at: new Date().toISOString(), candidateId });
             if (accepted && !tooMany) nAcc++;
@@ -2223,6 +2778,10 @@ export default function App() {
               repairs: rec.repairs,
               checks: { ...rec.checks, ...res.checks },
               anchor_match: res.anchor_match,
+              slot_id: slotMatch?.slot_id || "",
+              target_quarter: slotMatch?.quarter ?? (batch.length === 1 ? batch[0].quarter : null),
+              anchor_quarter: aQuarter,
+              target_focus: slotMatch?.focus || null,
               anchor_loc: res.anchor_loc,
               anchor2_loc: res.anchor2_loc,
               item: rec.item,
@@ -2302,13 +2861,40 @@ export default function App() {
       shortfalls: shortfallsRef.current.map((x) => ({ process: x.intended_process, requested: x.requested, accepted: x.accepted })),
     });
 
+    /* written question + premise check: everything it names must exist in
+       the text in that role; one regeneration if not. Logged either way. */
     try {
-      const raw = await ask(buildOpenPrompt(source.prompt, source.passage), {
-        maxTokens: 900,
-        schema: OPEN_SCHEMA,
-        config: cfg,
-      });
-      setOpenQ(parseJSON(raw));
+      const writtenId = runId + "-w";
+      const premise = { attempts: [] };
+      let q = null;
+      let problems = [];
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const raw = await ask(buildOpenPrompt(source.prompt, source.passage, problems), {
+          maxTokens: 900,
+          schema: OPEN_SCHEMA,
+          config: cfg,
+        });
+        const d = parseJSON(raw);
+        if (!d?.stem) continue;
+        q = { stem: String(d.stem), criteria: Array.isArray(d.criteria) ? d.criteria.map(String) : [] };
+        let chk;
+        try {
+          chk = await checkPremise({ stem: q.stem, criteria: q.criteria, passage: source.passage });
+        } catch (e) {
+          chk = { ok: null, problems: [], error: String(e?.message || e).slice(0, 120) };
+        }
+        premise.attempts.push({ stem: q.stem, ...chk });
+        if (chk.ok !== false) break;
+        problems = chk.problems.length ? chk.problems : ["the question names something the text does not contain in that role"];
+      }
+      if (q) {
+        const last = premise.attempts[premise.attempts.length - 1] || {};
+        premise.ok = last.ok;
+        premise.regenerated = premise.attempts.length > 1;
+        const full = { ...q, written_id: writtenId, run_id: runId, written_version: WRITTEN_VERSION, premise };
+        logWritten({ written_id: writtenId, run_id: runId, written_version: WRITTEN_VERSION, stem: q.stem, criteria: q.criteria, premise, created_at: new Date().toISOString() });
+        setOpenQ(full);
+      } else setOpenQ(null);
     } catch (e) {
       setOpenQ(null);
     }
@@ -2380,12 +2966,13 @@ export default function App() {
       byLevel,
       answers,
       openQ,
+      selfRating,
       slotIdx,
       rejected: rejectedRef.current,
       run: runRef.current,
       shortfalls: shortfallsRef.current,
     }),
-    [src, intent, byLevel, answers, openQ, slotIdx]
+    [src, intent, byLevel, answers, openQ, selfRating, slotIdx]
   );
 
   const persistNow = useCallback(async () => {
@@ -2402,16 +2989,17 @@ export default function App() {
   /* autosave whenever something worth keeping changes */
   useEffect(() => {
     if (!sessionId.current) return;
-    if (screen === "setup") return;
+    /* nothing to save until the questions exist; focus reading keeps its own draft */
+    if (screen === "setup" || screen === "focus") return;
     const t = setTimeout(() => {
       persistNow();
     }, 1200);
     return () => clearTimeout(t);
-  }, [answers, byLevel, openQ, screen, persistNow]);
+  }, [answers, byLevel, openQ, selfRating, screen, persistNow]);
 
   useEffect(() => {
     const flush = () => {
-      if (sessionId.current && screen !== "setup") persistNow();
+      if (sessionId.current && screen !== "setup" && screen !== "focus") persistNow();
     };
     document.addEventListener("visibilitychange", flush);
     window.addEventListener("pagehide", flush);
@@ -2435,6 +3023,7 @@ export default function App() {
     runRef.current = rec.run || null;
     shortfallsRef.current = rec.shortfalls || [];
     setOpenQ(rec.openQ || null);
+    setSelfRating(rec.selfRating || {});
     setGenErr(null);
     setSelection("");
     setSavedAt(rec.savedAt);
@@ -2445,7 +3034,10 @@ export default function App() {
     const next = slotsNow.findIndex((sl) => !(rec.answers || {})[sl.level + "-" + sl.i]);
     setSlotIdx(next === -1 ? 0 : next);
     saved.current = true;
-    setScreen("session");
+    /* all multiple-choice done: go back to the written question if it is
+       unfinished, otherwise to the review (which shows the saved writing) */
+    if (next === -1 && slotsNow.length) setScreen(rec.openQ && !rec.openQ.improved && !rec.openQ.skipped ? "open" : "review");
+    else setScreen("session");
   };
 
   const start = (source) => {
@@ -2457,12 +3049,33 @@ export default function App() {
     setAnswers({});
     setSlotIdx(0);
     setOpenQ(null);
+    setSelfRating({});
     setGenErr(null);
     setIntent(null);
     intentRef.current = null;
     rejectedRef.current = [];
     setSelection("");
     saved.current = false;
+    if (source.focusFirst) {
+      setScreen("focus");
+      return;
+    }
+    setScreen("session");
+    runGeneration(source);
+  };
+
+  /* focus reading finished: log it, then write the questions */
+  const finishReading = (reading) => {
+    const pid = passageId(src.passage);
+    const record = { ...reading, passage_id: pid, session_id: sessionId.current, app_version: APP_VERSION };
+    logReading(record);
+    if (reading.self_rating_after_reading != null) {
+      const r = { rating_id: reading.reading_id, reading_id: reading.reading_id, session_id: sessionId.current, passage_id: pid, after_reading: reading.self_rating_after_reading, after_reading_at: reading.ended_at, rating_version: RATING_VERSION };
+      setSelfRating(r);
+      logSelfRating(r);
+    }
+    const source = { ...src, reading: record };
+    setSrc(source);
     setScreen("session");
     runGeneration(source);
   };
@@ -2481,7 +3094,14 @@ export default function App() {
         correct: !!item.options[choice].correct,
         hints: hintLevel,
         hintKinds: earned,
+        /* coach turns BEFORE answering count as help; turns after answering are feedback */
+        coach: (coachMap[qKey] || []).filter((u) => !u.answered),
+        coachAfter: (coachMap[qKey] || []).filter((u) => u.answered),
+        helped: hintLevel > 0 || (coachMap[qKey] || []).some((u) => !u.answered),
+        locationShown: earned.some((k) => LOCATION_KINDS.includes(k)),
         wordGrade: wordGrades.current[qKey] || null,
+        /* word look-ups before answering (stem, options or passage); not counted as help */
+        lookups: (lookupMap[qKey] || []).filter((u) => !u.answered),
       },
     }));
   };
@@ -2540,6 +3160,12 @@ export default function App() {
           prompt={src.prompt}
           intent={intent}
           currentStem={item?.stem}
+          item={screen === "session" && item ? item : null}
+          answered={hasAnswered}
+          choice={hasAnswered ? answers[slot.level + "-" + slot.i]?.choice : null}
+          aboutQuestion={asking === "question"}
+          learner={learnerText(loadConfig())}
+          onUse={(u) => setCoachMap((m) => ({ ...m, [qKey]: [...(m[qKey] || []), u] }))}
           onClose={() => setAsking(false)}
         />
       )}
@@ -2547,64 +3173,44 @@ export default function App() {
         <WordCard word={lookup.word} sentence={lookup.sentence} onClose={() => setLookup(null)} />
       )}
 
-      <button
-        onClick={() => setShowNotes(true)}
-        className="ql-focus fixed z-40 px-3 py-2"
-        style={{
-          top: 12,
-          right: 156,
-          background: C.card,
-          border: `1px solid ${C.line}`,
-          borderRadius: 2,
-          fontFamily: F.mono,
-          fontSize: 10,
-          letterSpacing: "0.1em",
-          textTransform: "uppercase",
-          color: C.slate,
-        }}
-      >
-        Notes
-      </button>
+      {/* tools, always reachable: one group, top right */}
+      <div className="fixed z-40 flex gap-2" style={{ top: 12, right: 12 }}>
+        {[
+          ["Notes", () => setShowNotes(true)],
+          ["Words", () => setShowVocab(true)],
+          ["Model", () => setShowSettings(true)],
+        ].map(([label, fn]) => (
+          <button
+            key={label}
+            onClick={fn}
+            className="ql-focus px-3 py-1.5"
+            style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 2, fontFamily: F.ui, fontSize: 13, fontWeight: 600, color: C.slate }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
-      <button
-        onClick={() => setShowVocab(true)}
-        className="ql-focus fixed z-40 px-3 py-2"
-        style={{
-          top: 12,
-          right: 84,
-          background: C.card,
-          border: `1px solid ${C.line}`,
-          borderRadius: 2,
-          fontFamily: F.mono,
-          fontSize: 10,
-          letterSpacing: "0.1em",
-          textTransform: "uppercase",
-          color: C.slate,
-        }}
-      >
-        Words
-      </button>
-
-      <button
-        onClick={() => setShowSettings(true)}
-        className="ql-focus fixed z-40 px-3 py-2"
-        style={{
-          top: 12,
-          right: 12,
-          background: C.card,
-          border: `1px solid ${C.line}`,
-          borderRadius: 2,
-          fontFamily: F.mono,
-          fontSize: 10,
-          letterSpacing: "0.1em",
-          textTransform: "uppercase",
-          color: C.slate,
-        }}
-      >
-        Model
-      </button>
-
+      {screen !== "setup" && (
+        /* leaves room for the tool buttons: above them on phones, beside them on wider screens */
+        <div className="max-w-6xl mx-auto px-5 pt-14 sm:pt-3 sm:pr-64 pb-1 flex flex-wrap items-center gap-x-6 gap-y-1">
+          <span style={{ fontFamily: F.ui, fontSize: 14, fontWeight: 700, color: C.teal }}>AARC Reading Lab</span>
+          <StepBar className="" current={{ focus: 0, session: 1, open: 2, review: 3 }[screen] ?? 1} writeSkipped={!!openQ?.skipped} />
+        </div>
+      )}
       {screen === "setup" && <Setup onStart={start} onResume={resume} />}
+      {screen === "focus" && (
+        <FocusReading
+          passage={src.passage}
+          structure={structure}
+          title={src.meta?.title || ""}
+          plan={src.plan}
+          learner={learnerText(loadConfig())}
+          draftKey={"ql:focus:" + passageId(src.passage)}
+          onFinish={finishReading}
+          onExit={() => setScreen("setup")}
+        />
+      )}
 
       {(screen === "session" || screen === "open") && (
         <div>
@@ -2620,26 +3226,20 @@ export default function App() {
                 }}
                 title="Saves this passage, then lets you start another"
                 className="ql-focus shrink-0 pb-1 text-left"
-                style={{
-                  fontFamily: F.mono,
-                  fontSize: 10,
-                  letterSpacing: "0.06em",
-                  color: C.slate,
-                  lineHeight: 1.4,
-                }}
+                style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 600, color: C.slate, lineHeight: 1.35 }}
               >
-                <span style={{ textTransform: "uppercase" }}>← Save &amp; new</span>
+                <span>Save and start</span>
                 <br />
-                <span style={{ color: C.mute }}>passage</span>
+                <span style={{ color: C.mute, fontWeight: 400 }}>a new text</span>
               </button>
               <Climb counts={counts} answered={answered} current={screen === "open" ? 4 : slot?.level} />
               <button
                 onClick={persistNow}
                 className="ql-focus shrink-0 pb-1 text-right"
                 title="Your progress saves by itself; this forces it now"
-                style={{ fontFamily: F.mono, fontSize: 10, letterSpacing: "0.06em", color: C.slate, lineHeight: 1.4 }}
+                style={{ fontFamily: F.ui, fontSize: 12, fontWeight: 600, color: C.slate, lineHeight: 1.35 }}
               >
-                <span style={{ textTransform: "uppercase" }}>Save</span>
+                <span>Saved</span>
                 <br />
                 <span style={{ color: C.mute }}>{savedAt ? formatWhen(savedAt).split(" · ")[1] : "—"}</span>
               </button>
@@ -2665,6 +3265,7 @@ export default function App() {
               >
                 {screen === "open" && openQ && (
                   <OpenQuestion
+                    key={openQ.written_id || openQ.stem}
                     q={openQ}
                     passage={src.passage}
                     structure={structure}
@@ -2685,7 +3286,16 @@ export default function App() {
                     onPrev={prev}
                     savedGrade={wordGrades.current[qKey]}
                     isLast={slotIdx + 1 === slots.length}
-                    onWord={(word, sentence) => setLookup({ word, sentence })}
+                    onWord={(word, sentence) => {
+                      setLookup({ word, sentence });
+                      /* where she looked a word up, for the research log */
+                      const where = sentence === item.stem ? "stem" : item.options.some((o) => o.text === sentence) ? "option" : "passage";
+                      setLookupMap((m) => ({ ...m, [qKey]: [...(m[qKey] || []), { word, where, answered: hasAnswered, at: new Date().toISOString() }] }));
+                    }}
+                    onAskCoach={() => {
+                      setSelection(item.stem);
+                      setAsking("question");
+                    }}
                     where={where}
                     where2={where2}
                     steps={steps}
@@ -2766,7 +3376,9 @@ export default function App() {
                       structure={structure}
                       compact
                       where={screen === "open" ? openFocus.where : where}
+                      where2={screen === "open" ? null : item?.level === 3 ? where2 : null}
                       focus={screen === "open" ? openFocus.focus : passageFocus}
+                      keyword={screen === "open" ? "" : passageKeyword}
                       onWord={(word, sentence) => setLookup({ word, sentence })}
                       onSelect={setSelection}
                     />
@@ -2787,7 +3399,9 @@ export default function App() {
                   prompt={src.prompt}
                   structure={structure}
                   where={screen === "open" ? openFocus.where : where}
+                  where2={screen === "open" ? null : item?.level === 3 ? where2 : null}
                   focus={screen === "open" ? openFocus.focus : passageFocus}
+                  keyword={screen === "open" ? "" : passageKeyword}
                   onWord={(word, sentence) => setLookup({ word, sentence })}
                   onSelect={setSelection}
                 />
@@ -2811,6 +3425,23 @@ export default function App() {
           onRetry={retryMissed}
           rejected={rejectedRef.current}
           shortfalls={shortfallsRef.current}
+          openQ={openQ}
+          onOpenWritten={() => setScreen("open")}
+          selfRating={selfRating}
+          onRate={(n, stats) => {
+            const r = {
+              ...selfRating,
+              rating_id: selfRating.rating_id || "S" + sessionId.current,
+              session_id: sessionId.current,
+              run_id: runRef.current?.runId || null,
+              after_questions: n,
+              after_questions_at: new Date().toISOString(),
+              rating_version: RATING_VERSION,
+              ...stats,
+            };
+            setSelfRating(r);
+            logSelfRating(r);
+          }}
         />
       )}
     </div>

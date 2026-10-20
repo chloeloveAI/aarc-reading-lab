@@ -1,3 +1,102 @@
+# Changes — v10.4 (17 Oct 2026)
+
+Prompt `items-v10.3` · validator `validator-v10.2` · coverage `coverage-v2` · tutor `tutor-v1` · app `aarc-reading-lab-v10.4`.
+**Runs before and after this change are not comparable without noting the version.**
+
+## 1. Cloud model (OpenRouter) through the site
+- New provider **Cloud (OpenRouter)**. The browser sends only an access code to `netlify/functions/llm.mjs`; the OpenRouter key (`OPENROUTER_API_KEY`), the model (`MODEL`) and the code (`APP_ACCESS_CODE`) live in Netlify environment variables.
+- Thinking is turned off for reasoning models and JSON mode is used for structured requests. Output is capped at 4,000 tokens per call.
+- Cloud runs are logged with provider `openrouter` and the model name OpenRouter reports in its reply. A hosted model has no digest: it can change without notice, so record the run date.
+- An empty cloud reply is now logged as `empty_reply` (or `provider_filtered`), not as `output_truncated`.
+
+## 2. Focus reading (before any questions)
+- Turn on **Start with focus reading** on the start screen (on by default). The reader reads the passage alone first, with a count-up timer. Active time pauses while the tab is hidden.
+- Tap a word for its meaning; **Add to my vocabulary** marks it as new to the reader.
+- Select a sentence, several sentences or a paragraph (the ¶ button selects a paragraph) → **Highlight**, or **Explain this** to open the tutor.
+- The **tutor** sees only the highlighted part and the text before it, never the rest of the passage. It explains in a short dialogue, offers a check question and follow-ups, and must not hint at later text.
+- Progress = how far into the text the highlights reach (% of words). Scroll progress is logged separately.
+- A draft is kept in the browser, so a reload during reading doesn't lose it.
+- Everything is logged as a `reading_sessions` record (look-ups, saved words, highlights, every tutor turn, times). New export: **Focus reading (CSV)**, one row per event.
+
+## 3. Questions written after reading, across the whole text
+- Questions are written when the reader finishes focus reading (6 = 1·2·2·1 or 10 = 2·3·3·2, as before).
+- The passage is split into four quarters by word count. A **coverage plan** gives every question a quarter, so all four quarters are used and no quarter has more than one question above another.
+- Up to **one third** of the questions (2 of 6, 3 of 10) are built around what the reader did: parts she asked the tutor about first, then saved words (as "what does this word mean here?" items, process 2), then highlights. One of each kind is used before a second of any kind.
+- The prompt marks the quarters and lists each item's quarter and focus, plus evidence already used.
+- New checks: `distinct_evidence`, `in_target_quarter`, `focus_addressed` (see VALIDATOR.md). The run record holds `coverage_plan`, `coverage_summary` and `reading_id`; every candidate holds `slot_id`, `target_quarter`, `anchor_quarter` and `target_focus`.
+- Research caveat: targeted questions differ between readers by design. Analyse targeted and untargeted items separately (`target_focus_kind` in the candidates CSV).
+
+## 4. Fixes found in the first preview test
+- **Correct answer was nearly always A.** Models write the key first. The app now moves the correct option to a planned position (each block of four candidates uses A, B, C and D once, in a seeded order per run) and reorders the distractors. The order is fixed per item; the position the model wrote is kept as `key_as_written` in the candidates CSV.
+- **Question named the wrong section** ("roadworks in the final section" when the roadworks are in section 8). New check `location_consistent`: a stem that names a section must match where its evidence is; any mention of a "quarter" is rejected. The prompt also says quarters are for planning only.
+- **Process-3 hints pointed at one place first.** The first two hints named only the first evidence span and the passage outlined only that place, which steered readers into a one-place reading. Now hint 1 names both sections ("This question joins two parts of the text: … and … Read both."), hint 2 names both paragraphs, the passage outlines both places at every step, and the last hint marks both spans. Hint counts before and after this change are not comparable for process 3.
+- **Saved-word questions** must quote the words around the term, and the passage marks that sentence straight away (no hint needed), with the label "A word you saved while reading".
+
+## 5. Help while answering: thinking first, location last
+- **New hint ladder** (all processes): 1 strategy for the process (e.g. process 3: "Which two ideas does it ask you to connect?") · 2 key word in her own words · 3 the item's guiding question · 4 **strong help**: the section(s) to look in (both, for process 3). The paragraph step and the "evidence marked" step before answering are gone: location hints turned reading into search. The exact evidence is shown only after answering, as feedback.
+- **Question coach** (`coach-v1`) replaces the general ask panel while a question is open. It answers facts and word meanings directly; for interpretation it asks one question back. It never names a place in the text or repeats the correct option: every reply is checked in code, rewritten once, then replaced by a neutral nudge. After she answers, it can explain fully.
+- **Coach use before answering counts as help.** Each answer now records `coach` (turns before answering), `coachAfter`, `helped` and `locationShown`. Results line: "X of N answered without help · Y needed to be shown where to look · Z used the question coach".
+- Selecting up to 1,500 characters (a whole paragraph) now opens "Ask about this"; the old limit was 400 and longer selections did nothing.
+- Research note: hint counts and "answered without a hint" from before v10.4 are not comparable with these.
+
+## 6. Quarters cut at sentences (coverage-v2)
+- coverage-v1 cut the text into quarters between paragraphs. On a passage with a few very long paragraphs, a whole quarter fell inside one paragraph, so its marker was missing; the plan still asked for a question "from Quarter 2", and the model correctly declined. That level was then recorded as a shortfall.
+- Now quarters are cut at sentence boundaries (a sentence belongs to the quarter where it starts), so a marker can sit inside a long paragraph; the text itself is unchanged.
+- The plan only uses quarters that exist (a text of fewer than four sentences has fewer quarters).
+- The quarter of evidence, highlights and saved words is judged by sentence, not by paragraph.
+- Runs made with coverage-v1 on long-paragraph passages may show false shortfalls; check `coverage_version` in the run record.
+
+## 7. Key-word hint moved last; no quarter labels anywhere
+- The key-word hint ("Think about 'direction'. What does it mean here?") is now the LAST step, after "where to look". It is taken from the evidence sentence, so before the location it could not be answered, and searching for the word led straight to the evidence. Order now: strategy · guiding question · where to look (strong help) · key word.
+- New check `no_planning_labels`: an item is rejected if any text the reader sees (stem, options, "why", link, hints) contains a quarter label such as "Q1" or "quarter 3". The earlier stem check rejected every "quarter"; ordinary phrases like "a quarter of the cost" are now allowed.
+
+## 8. Tests
+- New: `tests/focusCoverage.test.mjs` (20 deterministic cases: quarters, the coverage plan, the tutor's read-so-far text, the coverage block in the prompt, section-name check, answer-key positions, the coach's leak check, long-paragraph and short-text quarters, and the written question: W1–W3).
+
+## 10. Evidence marked at sentence level after answering
+- After a right or wrong answer, the passage marks only the 1–3 sentences that hold the evidence, in **bold** with a light highlight — never the whole paragraph. Before, when the model's evidence quote did not match the text word for word, the whole paragraph was tinted.
+- Exact quote → every sentence the quote touches. Quote not exact → the run of 1–3 sentences that contains most of the quote's content words. Process 3 marks the sentences for both pieces of evidence.
+- Sentence splitting ignores "e.g.", "i.e.", "Dr.", initials, and full stops followed by a lower-case word. Pure functions `sentenceSpans` and `evidenceSpans` in `src/coverage.js`; test E1.
+
+## 15. AARC Reading Lab: name, step bar, upload a file
+- **Name:** browser tab, setup screen and session header now say "AARC Reading Lab" (`index.html`, `package.json` name `aarc-reading-lab`). The setup copy talks about "a text" rather than "a conversation"; the tabs are "A text" / "An AI chat transcript"; "What you asked" is now "Why you're reading it (optional)" and the box beside the passage only appears when it has content.
+- **Step bar:** Read → Answer → Write (optional) → Results, on every screen after setup (and as a preview on setup). The current step is filled, finished steps show a tick, a skipped written question shows "(skipped)". On phones "(optional)" is hidden so the bar fits one line.
+- **One label style:** section labels, hint tags ("Hint 2 (strong help)"), the passage panel, coach and focus-reading labels changed from small all-caps monospace to sentence-case labels in the UI font. Notes / Words / Model are one button group (no hand-tuned offsets).
+- **Upload a file** (setup, next to "The text to read"): .pdf, .docx, .txt, .md. Read in the browser — nothing is uploaded. PDF via pdf.js 4.10.38 (`isEvalSupported: false`; 3.x has a known malicious-PDF flaw), headings detected by font size, paragraphs by line gaps, hyphenated line breaks joined. Word via mammoth: headings → "## ", list items → "- ". Clear messages for a scanned PDF (no text layer), an old .doc file, or an unsupported type. Both libraries load only when a file is chosen. The file name fills the research-log title if empty. New file `src/fileText.js`; new dependencies `pdfjs-dist`, `mammoth`.
+
+## 14. The written question can be skipped
+- "Skip the written question" next to "Get feedback" ends the session after the multiple-choice questions (for short sessions). The second self-rating and the results still follow.
+- Logged as `skipped: true` in `written_answers` (column `skipped` in "Written answers (CSV)"); the review shows "Skipped."; Resume goes to the results, not back to the written question.
+
+## 13. Self-rated understanding (AARC calibration, self-rating-v1)
+- **After focus reading:** before the questions are made, she rates "how much of the text do you think you understand?" on 0–10. "Make my questions" stays disabled until she chooses.
+- **After all questions (and the written question):** the results screen first asks the same question again, before showing any score, so the score cannot shape the rating. Then it shows: after reading x/10 · after the questions y/10 · correct without any help n of N.
+- "Correct without any help" = answered correctly with no hint and no question coach — the performance side of calibration.
+- Saved in the session (not asked again on Resume) and in the research log (`self_ratings`, one record per reading session, with `answered_total`, `correct_total`, `unaided_correct`). New export "Self-ratings (CSV)". The merge tool combines `self_ratings`.
+- Interpretation note for the paper: a rise from the first to the second rating can reflect familiarity rather than understanding; compare it with unaided performance, not read it as a learning gain on its own.
+
+## 12. Choosing by letter; word meanings in the question and options; coach knows her choice (coach-v2)
+- **Only the letter chooses.** Each option has a large A/B/C/D button ("choose") on its left. Every word in the question and in the options can now be tapped for its meaning, before and after answering, without choosing that option by mistake.
+- **"What is this question asking?"** under every question opens the question coach on the question itself. Before answering, the coach rephrases the question in simpler words and names the kind of answer wanted (`kind: "clarify"`), without hinting at the answer or the place. It still counts as help (logged with `about: "question"`, so it can be separated from help about the text).
+- **The coach knows her choice.** After answering, the prompt says which letter she chose and whether it was wrong. For a wrong answer the coach first explains why her option does not fit the text, then why the correct one does. Ready-made questions: "Why is my answer (A) wrong?", "Why is B right?". The link under the question reads "Ask the coach why my answer is wrong". (Before, the coach did not know her choice and could wrongly say she had chosen the correct answer.)
+- **Research log:** each answer now saves `lookups` (words she looked up before answering, and where: stem, option or passage). Word look-ups are not counted as help.
+- Test Q2.
+
+## 11. Key-word hint marks the word in the text
+- When she opens the last hint ("Think about '…'"), the key word is also marked in the passage (bold, amber), and the panel scrolls to it. Header: "Narrowed to Section n · key word marked".
+- Only the occurrence inside the evidence sentence is marked (so a common word is not lit up across the paragraph). If the word is not in the evidence sentence, its occurrences in the evidence section are marked. Endings are allowed ("log" matches "logs").
+- After she answers, the key-word mark gives way to the evidence sentence(s) in bold.
+- For the research data: the key-word hint now also shows the location exactly, so treat it as location help (it already came after "where to look").
+
+## 9. Written question (written-v2, `src/written.js`)
+- **Premise check.** After the written question is generated, a second call checks that everything it names (framework, finding, contradiction, link) exists in the text in that role. If not, the question is regenerated once with the problems listed. The check result is logged either way (`premise.ok`, `premise.regenerated`, `premise.attempts`).
+- **The strong answer is never empty.** The marking reply is read under several field names (`model`, `model_answer`, `strong_answer`…); if none is there, one extra call writes the strong answer.
+- **One revision first.** After feedback she gets "Try once more" with the nudge. She revises (or chooses "Skip, show me"). Only then are the improved answer and the strong answer shown.
+- **"Your answer, improved".** Built from her revision (or first answer if skipped): her words are kept, added or changed parts are highlighted and numbered, each with a short reason. `kept_share` records how much of her wording survived.
+- **Saved automatically.** Her first answer is saved the moment she submits (before the marking call, so a failed call never loses it), then the mark, the revision and the improved/strong answers as each arrives. Saved in the session (so "Resume" goes back to exactly where she was) and in the research log (`written_answers`).
+- **Review screen** now shows the written question: first answer with its verdict, revision, improved answer and strong answer. If the written question is unfinished, a link returns to it. Resuming a session whose multiple-choice questions are all answered opens the written question if unfinished, otherwise the review.
+- **New export:** "Written answers (CSV)", one row per written answer. The merge tool also combines `written_answers`.
+
 # Changes — 15 Oct 2026
 
 ## 1. Hints no longer give the answer away

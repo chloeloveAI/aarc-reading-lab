@@ -60,7 +60,7 @@ export function Speaker({ text, rate, size = 22, title = "Hear it" }) {
 /* Small cache so re-clicking a word is instant and free. */
 const cache = new Map();
 
-export function WordCard({ word, sentence, onClose }) {
+export function WordCard({ word, sentence, onClose, onSaved }) {
   const [data, setData] = useState(cache.get(word.toLowerCase()) || null);
   const [err, setErr] = useState("");
   const [saved, setSaved] = useState(false);
@@ -89,6 +89,7 @@ export function WordCard({ word, sentence, onClose }) {
   const save = async () => {
     await addVocab(data);
     setSaved(true);
+    onSaved?.(data);
   };
 
   return (

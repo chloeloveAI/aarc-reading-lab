@@ -119,7 +119,32 @@ function trimPassage(text) {
 /* PASSAGE_TOKEN lets the log store the prompt without duplicating the passage */
 export const PASSAGE_TOKEN = "<<PASSAGE>>";
 
-export function buildItemPromptV10({ level, count, passage, usedStems = [], cfg = {}, exemplars = [], forLog = false }) {
+/* v10.4 coverage plan: one line per item in this request */
+function coverageBlock(slots, usedAnchors) {
+  if (!slots || !slots.length) return "";
+  const q = (t) => String(t || "").replace(/"/g, "'").replace(/\s+/g, " ").trim().slice(0, 400);
+  const lines = slots.map((s, i) => {
+    const head = `Item ${i + 1}: its "anchor" (the main evidence) must come from QUARTER ${s.quarter}.`;
+    const f = s.focus;
+    if (!f) return head;
+    if (f.kind === "vocab")
+      return `${head} While reading, the reader looked up the word '${q(f.text)}' and saved it as new to her. Test what '${q(f.text)}' means IN THIS TEXT. The stem must quote 5 to 10 words around the word, exactly as written, in single quotes (e.g. In 'traffic in the city centre fell', what does 'centre' mean?) — never describe the sentence vaguely. The "anchor" is copied from the sentence where it appears, the four options are possible meanings, the correct one fits this context, and the distractors are other real senses of the word or meanings that misread the sentence. Set "keyword" to '${q(f.text)}'.`;
+    const asked = f.kind === "tutor" ? ` She asked the tutor to explain it${f.question ? `, and asked: '${q(f.question)}'` : ""}.` : "";
+    return `${head} While reading, the reader ${f.kind === "tutor" ? "highlighted and asked about" : "highlighted"} this part: '${q(f.text)}'.${asked} Build the item around the idea in that part, so it checks whether she now understands it. Take the evidence from that part. Do not reuse a tutor's wording.`;
+  });
+  return `
+COVERAGE PLAN. The text is split into four quarters, each starting with a line like [QUARTER 2 OF 4 STARTS HERE]. Those marker lines are not part of the text: never copy them into an anchor. Write the items in this order:
+${lines.join("\n")}
+Every item must test a DIFFERENT idea and use DIFFERENT evidence from the other items.
+The quarter markers are for planning only: never mention quarters or labels like 'Q1' anywhere in an item (stem, options, "why", "link", hints). If a stem names a part of the text (e.g. 'the final section', 'Section 3'), it must be exactly where the anchor is — check the section headings before naming one.${
+    usedAnchors && usedAnchors.length
+      ? `\nEvidence already used by earlier questions — choose other evidence: ${usedAnchors.map((a) => `'${q(a).slice(0, 120)}'`).join("; ")}`
+      : ""
+  }
+`;
+}
+
+export function buildItemPromptV10({ level, count, passage, usedStems = [], cfg = {}, exemplars = [], forLog = false, markedPassage = "", slots = null, usedAnchors = [] }) {
   const P = PROCESSES[level];
   const strict = cfg.l3Strict !== false;
   const textType = cfg.textType || "auto";
@@ -132,7 +157,7 @@ TEXT TYPE: ${TEXT_TYPES[textType] || TEXT_TYPES.auto}
 
 THE TEXT. Every item must be grounded in it:
 <passage>
-${forLog ? PASSAGE_TOKEN : trimPassage(passage)}
+${forLog ? PASSAGE_TOKEN : trimPassage(slots && markedPassage ? markedPassage : passage)}
 </passage>
 
 Write exactly ${count} multiple-choice item${count > 1 ? "s" : ""} for this comprehension process:
@@ -147,7 +172,7 @@ Distractors: ${P.distractors}${P.form ? `\nItem form: ${P.form}` : ""}${
         : "\n\"anchor\" and \"anchor2\" must be different sentences; they may be in the same paragraph."
       : ""
   }
-${exemplarBlock(exemplars, level)}
+${exemplarBlock(exemplars, level)}${coverageBlock(slots, usedAnchors)}
 Rules for every item:
 - The correct answer must be grounded in this text. A reader who has not read it must not be able to answer correctly from general knowledge alone.
 - The stem is a complete question ending with a question mark.
