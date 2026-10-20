@@ -43,4 +43,4 @@ Participant names have been replaced by the codes used in the paper (P3 and P4 a
 
 See the repository `README.md`. In brief: `npm install`, `npm run dev`, then choose a provider in Settings (local Ollama, an OpenAI-compatible endpoint, or the cloud proxy, which needs the Netlify environment variables `OPENROUTER_API_KEY`, `MODEL` and `APP_ACCESS_CODE`). The research log is kept in the browser's local storage and exported from the app; nothing is sent to the author.
 
-A hosted Iteration-2 instance is available at https://tangerine-heliotrope-cdf2c8.netlify.app (an access code is required for the cloud model; it is supplied to reviewers with the submission).
+A hosted Iteration-2 instance is available at https://aarc-reading-lab.netlify.app (an access code is required for the cloud model; it is supplied to reviewers with the submission).
